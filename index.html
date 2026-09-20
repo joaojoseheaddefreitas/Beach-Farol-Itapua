@@ -2721,7 +2721,6 @@ function renderItems() {
           <img src="${item.img}" alt="${item.nome}" class="card-img"
             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDAgNDAwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmM2U5ZDYiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNlM2QyYjMiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0idXJsKCNnKSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2E4OGE1NSIgc3Ryb2tlLXdpZHRoPSIxMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMjAwIDk1IEwxNzggMTc1IEgyMjIgWiIvPjxwYXRoIGQ9Ik0xNzAgMTc1IEwxNTAgMjg1IEgyNTAgTDIzMCAxNzUiLz48cGF0aCBkPSJNMTQwIDI4NSBIMjYwIi8+PHBhdGggZD0iTTEyMCAxODAgTDE2NSAxNjUgTTI4MCAxODAgTDIzNSAxNjUiLz48L2c+PHRleHQgeD0iMjAwIiB5PSIzNDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxIZWx2ZXRpY2Esc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzdhNjEzNiI+Rm90byBlbSBicmV2ZTwvdGV4dD48L3N2Zz4K';this.onerror=null"/>
           ${item.mascaraPreco ? `<span class="cc-mascara-preco">${fmtBRL(typeof _itemPreco==="function" ? _itemPreco(item) : item.preco)}</span>` : ""}
-          <span class="b-cat">${cat.icone} ${cat.nome.split(" ")[0]}</span>
           ${esgotado ? `<span class="b-time" style="background:#6b7280">😔 Esgotado</span>` : `<span class="b-time">⏱ ${item.tempo} min</span>`}
           ${item.novo && !esgotado ? `<span class="b-new">✨ Novidade</span>` : ""}
           ${estoqueQty !== null && estoqueQty > 0 && estoqueQty <= 5 ? `<span class="b-new" style="background:#f59e0b">⚠️ Últimas ${estoqueQty}</span>` : ""}
@@ -7126,7 +7125,6 @@ renderItems = function() {
           <img src="${item.img}" alt="${item.nome}" class="card-img"
             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDAgNDAwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmM2U5ZDYiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNlM2QyYjMiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0idXJsKCNnKSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2E4OGE1NSIgc3Ryb2tlLXdpZHRoPSIxMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMjAwIDk1IEwxNzggMTc1IEgyMjIgWiIvPjxwYXRoIGQ9Ik0xNzAgMTc1IEwxNTAgMjg1IEgyNTAgTDIzMCAxNzUiLz48cGF0aCBkPSJNMTQwIDI4NSBIMjYwIi8+PHBhdGggZD0iTTEyMCAxODAgTDE2NSAxNjUgTTI4MCAxODAgTDIzNSAxNjUiLz48L2c+PHRleHQgeD0iMjAwIiB5PSIzNDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxIZWx2ZXRpY2Esc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzdhNjEzNiI+Rm90byBlbSBicmV2ZTwvdGV4dD48L3N2Zz4K';this.onerror=null"/>
           ${item.mascaraPreco ? `<span class="cc-mascara-preco">${fmtBRL(typeof _itemPreco==="function" ? _itemPreco(item) : item.preco)}</span>` : ""}
-          <span class="b-cat">${cat.icone} ${cat.nome.split(" ")[0]}</span>
           ${esgotado
             ? `<span class="b-time" style="background:#6b7280">😔 Esgotado</span>`
             : `<span class="b-time">⏱ ${item.tempo} min</span>`}
@@ -12787,7 +12785,7 @@ function ccNotificarNovoPedidoBalcao(pedido) {
   ccTocarAlertaSonoro();
   const card = document.createElement("div");
   card.style.cssText = "position:fixed;top:16px;right:16px;z-index:10080;background:#fff;border:2px solid #7c3aed;"
-    + "border-radius:14px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:260px";
+    + "border-radius:14px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:260px;animation:pulse 1s infinite";
   card.innerHTML = `
     <p style="font-weight:800;color:#6d28d9;font-size:.85rem">🔔 Mesa ${pedido.mesa} — Balcão</p>
     <p style="font-size:.8rem;color:#374151;margin:4px 0 10px">R$ ${Number(pedido.total).toFixed(2)}</p>
@@ -12808,8 +12806,42 @@ document.addEventListener("DOMContentLoaded", function () {
   setTimeout(ccIniciarEscutaFilaBalcaoCaixa, 600);
 });
 
+// ─── Alerta VISUAL (pisca a tela inteira) — reforço pro som, que sozinho
+// pode passar despercebido com o aparelho longe ou em ambiente barulhento.
+// Fica por cima de QUALQUER tela do app (cozinha, cardápio, etc.), não só
+// da tela de atendente, porque é anexado direto no body.
+function ccFlashAlertaVisual() {
+  try {
+    const antigo = document.getElementById("cc-flash-alerta");
+    if (antigo) antigo.remove();
+    const flash = document.createElement("div");
+    flash.id = "cc-flash-alerta";
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 3200);
+  } catch (e) {
+    console.warn("[Alerta visual] Falhou:", e.message);
+  }
+}
+if (!document.getElementById("cc-flash-alerta-style")) {
+  const st = document.createElement("style");
+  st.id = "cc-flash-alerta-style";
+  st.textContent = `
+@keyframes ccFlashPisca{
+  0%,100%{opacity:0}
+  10%,30%,50%,70%,90%{opacity:1}
+  20%,40%,60%,80%{opacity:0}
+}
+#cc-flash-alerta{
+  position:fixed;inset:0;z-index:99999;pointer-events:none;
+  box-shadow:inset 0 0 0 12px #ef4444, inset 0 0 90px 16px rgba(239,68,68,.55);
+  animation:ccFlashPisca .5s steps(1,end) 6;
+}`;
+  document.head.appendChild(st);
+}
+
 // ─── DIFERENCIAL 2: Alerta sonoro no caixa quando uma mesa entra na fila ──
 function ccTocarAlertaSonoro() {
+  ccFlashAlertaVisual();
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const tocarBip = (freq, inicioSeg, duracaoSeg) => {
@@ -18581,7 +18613,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
 #cc-ads-banner .cc-ads-dot{border:0;background:transparent;padding:6px 4px;cursor:pointer;line-height:0}
 #cc-ads-banner .cc-ads-dot i{display:block;width:7px;height:7px;border-radius:999px;background:rgba(255,255,255,.55);box-shadow:0 1px 3px rgba(0,0,0,.45);transition:width .25s ease,background .25s ease}
 #cc-ads-banner .cc-ads-dot.on i{width:18px;background:#f97316}
-@media (prefers-reduced-motion:reduce){#cc-ads-banner .cc-ads-track{transition:none}}
+#cc-ads-banner.cc-ads-reduz .cc-ads-track{transition:none}  /* só é aplicada se deslizarMesmoComMovimentoReduzido = false */
 
 /* destaque temporário no prato/grupo para onde o banner levou o cliente */
 @keyframes ccAdsPulse{
@@ -18613,6 +18645,8 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
      inativo ou esgotado.
      ───────────────────────────────────────────────────────────────── */
   var CC_ADS = {
+    deslizarMesmoComMovimentoReduzido: true,  /* true = o banner DESLIZA para o lado mesmo se o celular estiver com "Reduzir movimento"; false = nesses aparelhos a troca é instantânea */
+    respeitarMovimentoReduzido: false,  /* false = gira mesmo se o celular estiver com "Reduzir movimento" (a troca vira instantânea, sem deslize); true = para de girar nesses aparelhos */
     intervaloMs: 8000,   /* tempo de parada em cada promoção (ms) — 8 s dá tempo de ler título + subtítulo */
     slides: [
       { tag:"⭐ Prato do Dia", titulo:"Moqueca de Camarão", sub:"Preço especial hoje!",
@@ -18625,7 +18659,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
   };
   window.CC_ADS = CC_ADS;
 
-  var banner=null, track=null, dotsWrap=null, slidesOk=[], idx=0, timer=null, pausado=false, moveu=false;
+  var banner=null, track=null, dotsWrap=null, slidesOk=[], idx=0, timer=null, pausado=false, pausadoDesde=0, moveu=false;
   var reduz = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
@@ -18710,17 +18744,33 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
     if(!semTimer) iniciar();
   }
 
-  /* ── autoplay: só roda com o banner visível, aba aberta e sem toque ── */
+  /* ── autoplay: só roda com o banner visível, aba aberta e sem toque ──
+     Em vez de offsetParent (que em alguns celulares/versões de WebView
+     retorna null mesmo com o banner totalmente visível, por causa dos
+     "position:relative + top:calc(...)" usados no ajuste fino de layout),
+     usa getBoundingClientRect: mais confiável em qualquer aparelho. */
   function visivel(){
-    return !!banner && banner.offsetParent!==null && !document.hidden &&
-           !document.body.classList.contains("cc-cardapio-full");
+    if(!banner || document.hidden || document.body.classList.contains("cc-cardapio-full")) return false;
+    var r=banner.getBoundingClientRect();
+    return r.width>0 && r.height>0;
   }
   function parar(){ if(timer){ clearInterval(timer); timer=null; } }
   function iniciar(){
     parar();
-    if(reduz || slidesOk.length<2) return;
-    timer=setInterval(function(){ if(!pausado && visivel()) ir(idx+1,true); }, CC_ADS.intervaloMs||8000);
+    if((reduz && CC_ADS.respeitarMovimentoReduzido) || slidesOk.length<2) return;
+    timer=setInterval(function(){
+      /* trava de segurança: se algum evento de "soltar" se perder (comum em
+         celular, quando o dedo sai da tela sem disparar touchend/touchcancel),
+         a pausa expira sozinha em 6 s em vez de travar o carrossel de vez */
+      if(pausado && Date.now()-pausadoDesde>6000) pausado=false;
+      if(!pausado && visivel()) ir(idx+1,true);
+    }, CC_ADS.intervaloMs||8000);
   }
+  /* reforço: celular às vezes suspende o setInterval ao trocar de app/aba
+     e não retoma sozinho ao voltar — força reiniciar nesses momentos */
+  ["pageshow","focus","orientationchange"].forEach(function(ev){
+    window.addEventListener(ev,function(){ pausado=false; iniciar(); });
+  });
 
   /* ── clique no banner → leva direto à categoria / produto ── */
   function destacar(el){
@@ -18773,7 +18823,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
     });
     var x0=null,y0=null;
     banner.addEventListener("touchstart",function(e){
-      var t=e.touches[0]; x0=t.clientX; y0=t.clientY; pausado=true; moveu=false;
+      var t=e.touches[0]; x0=t.clientX; y0=t.clientY; pausado=true; pausadoDesde=Date.now(); moveu=false;
     },{passive:true});
     banner.addEventListener("touchend",function(e){
       if(x0!==null){
@@ -18785,9 +18835,12 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
       x0=null; pausado=false;
     },{passive:true});
     banner.addEventListener("touchcancel",function(){ x0=null; pausado=false; },{passive:true});
-    banner.addEventListener("mouseenter",function(){ pausado=true; });
-    banner.addEventListener("mouseleave",function(){ pausado=false; });
-    document.addEventListener("visibilitychange",function(){ if(!document.hidden) iniciar(); });
+    var temMouse = !!(window.matchMedia && window.matchMedia("(hover:hover) and (pointer:fine)").matches);
+    if(temMouse){
+      banner.addEventListener("mouseenter",function(){ pausado=true; pausadoDesde=Date.now(); });
+      banner.addEventListener("mouseleave",function(){ pausado=false; });
+    }
+    document.addEventListener("visibilitychange",function(){ if(!document.hidden){ pausado=false; iniciar(); } });
   }
 
   /* ── monta o banner dentro de #cc-cat-nav-wrap (idempotente) ── */
@@ -18800,6 +18853,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
     banner.setAttribute("role","region");
     banner.setAttribute("aria-roledescription","carrossel");
     banner.setAttribute("aria-label","Promoções e destaques");
+    if(reduz && !CC_ADS.deslizarMesmoComMovimentoReduzido) banner.classList.add("cc-ads-reduz");
     wrap.appendChild(banner);
     ligarEventos();
     if(montarHTML()) iniciar();
@@ -19604,6 +19658,21 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   body.cc-modo-cliente:not(.cc-cardapio-full) #cc-slot-mesa-cliente #cc-ident-input-cliente{
     padding-left:10px!important;
     padding-right:10px!important;
+  }
+}
+</style>
+<style id="cc-badge-tempo-compacto">
+/* Selo de tempo de preparo (canto sup. direito da foto) menor no celular,
+   pra cobrir bem menos da imagem do prato -- só isso muda, o resto do
+   card fica igual. O selo de categoria foi removido: ele repetia o nome
+   que já aparece no título da seção logo acima da grade (redundante em
+   toda tela: categoria única, "Todos" ou busca). */
+@media (max-width:640px){
+  #items-wrap .b-time{
+    font-size:.62rem!important;
+    padding:3px 7px!important;
+    top:6px!important;
+    right:6px!important;
   }
 }
 </style>
