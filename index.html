@@ -41,7 +41,17 @@ window.COOKCONTROL_CONFIG = {
     "pedidosDelivery_v1": "pedidos_delivery",
     "config":             "config_estabelecimento",
     "categorias":         "cardapio_categorias",
-    "estoque":            "estoque_itens"
+    "estoque":            "estoque_itens",
+    "avaliacoes":         "avaliacoes_clientes",
+    "clientesVip_v1":     "clientes_vip",
+    "creditoLivro_v1":    "credito_livro",
+    "fechamentos":        "fechamentos_caixa",
+    "fichas_tecnicas_v1": "fichas_tecnicas",
+    "historico":          "historico_geral",
+    "insumos_v2":         "insumos",
+    "movimentos_v2":      "movimentos_caixa",
+    "pagamentos2":        "pagamentos_registros",
+    "pagamentos_v2":      "pagamentos_v2_registros"
   },
 
   // Supabase Storage — onde as fotos de produto enviadas pelo Admin são guardadas
@@ -117,9 +127,6 @@ window.COOKCONTROL_CONFIG = {
   var _online = false;
 
   function _init() {
-    // BEACH FAROL: backend externo desativado — tudo roda 100% em localStorage.
-    console.info("[Sync] desativado — modo localStorage");
-    return;
     try {
       if (typeof supabase === "undefined" || !supabase.createClient) return;
       if (SUPABASE_KEY === "COLE_SUA_CHAVE_ANON_AQUI") {
@@ -129,9 +136,23 @@ window.COOKCONTROL_CONFIG = {
       _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
       _online = true;
       console.log("[Sync] ✅ Supabase conectado:", SUPABASE_URL);
-      _pullRemote(); // tenta carregar dados remotos na inicialização
+      _empurrarTudoQueJaExisteLocal(); // manda pro servidor o que já foi editado neste aparelho
+      _pullRemote(); // preenche do servidor só as chaves que este aparelho ainda não tem
     } catch(e) {
       console.warn("[Sync] Supabase indisponível, modo offline:", e.message);
+    }
+  }
+
+  /* Reativação da sincronização (depois de meses só em localStorage): sem
+     isso, tudo que já foi editado neste aparelho (cardápio, preços, banner,
+     ícones) ficaria de fora — _pullRemote() só entra se a chave local
+     estiver vazia, e aqui ela nunca está. Roda uma vez, ao ligar o Sync. */
+  function _empurrarTudoQueJaExisteLocal() {
+    for (var key in SYNC_MAP) {
+      var localVal = localStorage.getItem("solbahia_" + key);
+      if (localVal === null) continue;
+      try { _push(key, JSON.parse(localVal)); }
+      catch(e) { console.warn("[Sync] Falha ao reenviar", key, ":", e.message); }
     }
   }
 
@@ -149,8 +170,14 @@ window.COOKCONTROL_CONFIG = {
       var { error } = await _sb
         .from(tabela)
         .upsert(payload, { onConflict: "chave" });
-      if (error) console.warn("[Sync] Push erro em", tabela, ":", error.message);
-      else        console.debug("[Sync] Push OK →", tabela);
+      if (error) {
+        console.warn("[Sync] Push erro em", tabela, ":", error.message);
+        if (typeof window.toast === "function") {
+          window.toast("❌ Não sincronizou (" + tabela + "): " + error.message);
+        }
+      } else {
+        console.debug("[Sync] Push OK →", tabela);
+      }
     } catch(e) {
       console.warn("[Sync] Push falhou:", e.message);
     }
@@ -1515,14 +1542,14 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
 <div>
 <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Logomarca</label>
 <div class="flex items-center gap-3">
-<img class="hidden w-12 h-12 rounded-lg object-cover border border-gray-200" id="adm-preview-logo" src="https://preview--layout-lovely-lite.lovable.app/app/index.html">
+<img class="hidden w-12 h-12 rounded-lg object-cover border border-gray-200" id="adm-preview-logo" src="">
 <input accept="image/*" class="text-xs w-full file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100" id="adm-upload-logo" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-logo&#39;)" type="file">
 </div>
 </div>
 <div>
 <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Banner de Capa</label>
 <div class="flex items-center gap-3">
-<img class="hidden w-20 h-12 rounded-lg object-cover border border-gray-200" id="adm-preview-banner" src="https://preview--layout-lovely-lite.lovable.app/app/index.html">
+<img class="hidden w-20 h-12 rounded-lg object-cover border border-gray-200" id="adm-preview-banner" src="">
 <input accept="image/*" class="text-xs w-full file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100" id="adm-upload-banner" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-banner&#39;)" type="file">
 </div>
 </div>
@@ -1530,10 +1557,10 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
 <div class="mt-4 pt-4 border-t border-gray-100">
 <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Imagens das 4 abas do Cliente</label>
 <div class="grid grid-cols-2 gap-3">
-  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">🍽️ Cardápio</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-cardapio" src="https://preview--layout-lovely-lite.lovable.app/app/index.html"><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-cardapio" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-cardapio&#39;)" type="file"></div></div>
-  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">⏳ Meu Pedido</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-pedidos" src="https://preview--layout-lovely-lite.lovable.app/app/index.html"><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-pedidos" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-pedidos&#39;)" type="file"></div></div>
-  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">🧾 Minha Conta</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-conta" src="https://preview--layout-lovely-lite.lovable.app/app/index.html"><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-conta" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-conta&#39;)" type="file"></div></div>
-  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">⭐ VIP / Especial</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-vip" src="https://preview--layout-lovely-lite.lovable.app/app/index.html"><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-vip" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-vip&#39;)" type="file"></div></div>
+  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">🍽️ Cardápio</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-cardapio" src=""><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-cardapio" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-cardapio&#39;)" type="file"></div></div>
+  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">⏳ Meu Pedido</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-pedidos" src=""><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-pedidos" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-pedidos&#39;)" type="file"></div></div>
+  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">🧾 Minha Conta</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-conta" src=""><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-conta" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-conta&#39;)" type="file"></div></div>
+  <div><span class="text-[11px] font-bold text-gray-500 block mb-1">⭐ Avaliação</span><div class="flex items-center gap-2"><img class="w-16 h-10 rounded-lg object-cover border border-gray-200" id="adm-preview-client-avaliar" src=""><input accept="image/*" class="text-[10px] w-full" id="adm-upload-client-avaliar" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-client-avaliar&#39;)" type="file"></div></div>
 </div>
 </div>
 <p class="text-[11px] text-gray-400 mt-2">As imagens são salvas ao clicar em "💾 Salvar Configurações de Operação" ou "💾 Salvar Modelo de Serviço".</p>
@@ -13122,15 +13149,30 @@ function salvarConfiguracoesModo() {
   config.svcEspeto = !!document.getElementById("adm-chk-espeto")?.checked;
   config.svcComb = !!document.getElementById("adm-chk-comb")?.checked;
 
-  const previewLogo = document.getElementById("adm-preview-logo");
-  const previewBanner = document.getElementById("adm-preview-banner");
-  if (previewLogo && !previewLogo.classList.contains("hidden") && previewLogo.src) config.designLogo = previewLogo.src;
-  if (previewBanner && !previewBanner.classList.contains("hidden") && previewBanner.src) config.designBanner = previewBanner.src;
+  // blob: é só a prévia local enquanto o upload real ainda não terminou —
+  // nunca deve ser gravado (não existe fora desta aba/sessão).
+  var _aindaEnviando = false;
+  var previewLogo = document.getElementById("adm-preview-logo");
+  var previewBanner = document.getElementById("adm-preview-banner");
+  if (previewLogo && !previewLogo.classList.contains("hidden") && previewLogo.src) {
+    if (previewLogo.src.startsWith("blob:")) _aindaEnviando = true;
+    else config.designLogo = previewLogo.src;
+  }
+  if (previewBanner && !previewBanner.classList.contains("hidden") && previewBanner.src) {
+    if (previewBanner.src.startsWith("blob:")) _aindaEnviando = true;
+    else config.designBanner = previewBanner.src;
+  }
   config.clientTabImages = config.clientTabImages || {};
-  ['cardapio','pedidos','conta','vip'].forEach(k => {
+  ['cardapio','pedidos','conta','avaliar'].forEach(k => {
     const preview = document.getElementById('adm-preview-client-' + k);
-    if(preview && preview.src) config.clientTabImages[k] = preview.src;
+    if (preview && preview.src) {
+      if (preview.src.startsWith("blob:")) _aindaEnviando = true;
+      else config.clientTabImages[k] = preview.src;
+    }
   });
+  if (_aindaEnviando && typeof toast === "function") {
+    toast("⏳ Aguarde o envio da imagem terminar antes de salvar de novo.");
+  }
 
   salvar("config", config);
 
@@ -13144,21 +13186,62 @@ function salvarConfiguracoesModo() {
   config.comandaCozinha  = (document.getElementById("adm-exibir-painel") || {}).checked || false;
 
   salvar("config", config);
+  if (typeof ccAplicarIconesAbasCliente === "function") ccAplicarIconesAbasCliente();
   toast("✅ Modos de operação e regras salvos com sucesso!");
   render();
 }
 
-// ─── IDENTIDADE VISUAL: UPLOAD DE LOGO/BANNER (BASE64) ─────────
-function ccProcessarUploadImagem(inputEl, previewImgId) {
+// ─── IDENTIDADE VISUAL: UPLOAD DE LOGO/BANNER/ÍCONES (STORAGE REAL) ────
+// Antes isso só gerava uma prévia em base64 (nunca salva de verdade em
+// lugar nenhum). Agora sobe o arquivo pro Supabase Storage — mesmo
+// caminho já usado pra foto de produto — e guarda a URL pública, que aí
+// sim é persistida por salvarConfiguracoesModo() e sincronizada pra
+// todo mundo via _push().
+async function ccProcessarUploadImagem(inputEl, previewImgId) {
   const file = inputEl.files && inputEl.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const preview = document.getElementById(previewImgId);
-    if (preview) { preview.src = e.target.result; preview.classList.remove("hidden"); }
-  };
-  reader.readAsDataURL(file);
+  const preview = document.getElementById(previewImgId);
+
+  // Prévia instantânea (local, só visual) enquanto sobe de verdade
+  const previaLocal = URL.createObjectURL(file);
+  if (preview) { preview.src = previaLocal; preview.classList.remove("hidden"); }
+
+  try {
+    const urlPublica = await _uploadImagemParaStorage(file);
+    if (preview) preview.src = urlPublica;
+    if (typeof toast === "function") toast("✅ Imagem enviada — clique em Salvar pra confirmar.");
+    URL.revokeObjectURL(previaLocal);
+  } catch (e) {
+    console.warn("[Upload imagem marca] falhou:", e.message);
+    if (typeof toast === "function") toast("❌ Falha ao enviar imagem: " + e.message);
+    // mantém a prévia local (blob:) pra não perder a seleção visualmente —
+    // não revoga aqui, senão a imagem exibida quebra na hora.
+  }
 }
+
+// ─── ÍCONES DAS 4 ABAS DO CLIENTE: aplica as imagens enviadas pelo admin ──
+// Antes, config.clientTabImages era salvo mas NUNCA lido de volta — as
+// abas do cliente sempre mostravam o SVG padrão, não importa o que fosse
+// enviado no admin. Troca o <svg class="cc-nav-ic"> pelo <img> equivalente
+// quando existe uma imagem configurada pra aquela aba; senão, mantém o SVG.
+function ccAplicarIconesAbasCliente() {
+  const mapa = (typeof config !== "undefined" && config.clientTabImages) || {};
+  const nav = document.getElementById("cc-nav-publica");
+  if (!nav) return;
+  nav.querySelectorAll("button[data-cc-nav]").forEach(btn => {
+    const chave = btn.getAttribute("data-cc-nav");
+    const url = mapa[chave];
+    if (!url) return;
+    const iconeAtual = btn.querySelector(".cc-nav-ic");
+    if (!iconeAtual || (iconeAtual.tagName === "IMG" && iconeAtual.src === url)) return;
+    const img = document.createElement("img");
+    img.className = "cc-nav-ic";
+    img.src = url;
+    img.alt = "";
+    iconeAtual.replaceWith(img);
+  });
+}
+document.addEventListener("DOMContentLoaded", ccAplicarIconesAbasCliente);
 
 
 function ccRequerPrePago(mesa) {
@@ -17693,6 +17776,7 @@ body.cc-modo-cliente #cc-topo-banner-img{
 /* ÍCONES PROFISSIONAIS NO MENU INFERIOR — zero emojis */
 #cc-nav-publica button{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:3px!important;text-align:center!important;letter-spacing:.02em}
 #cc-nav-publica button .cc-nav-ic{width:20px;height:20px;display:block;flex:0 0 auto;stroke:currentColor}
+#cc-nav-publica button img.cc-nav-ic{object-fit:cover;border-radius:5px}
 </style>
 <script>
 /* Aplica a composição de 3 fotos também no banner do Dono, puxando "ao vivo"
