@@ -157,13 +157,18 @@ window.COOKCONTROL_CONFIG = {
   }
 
   /* ── PUSH: salva no Supabase após cada localStorage write ────── */
+  // Prefixo de isolamento: várias instalações (cliente, demo, padrão) podem
+  // compartilhar o mesmo projeto Supabase -- sem isso, todas gravam na
+  // mesma linha ("config", "categorias" etc.) e uma sobrescreve a outra.
+  function _chaveNs(key) { return (window.COOKCONTROL_CONFIG.empresaId || "default") + ":" + key; }
+
   async function _push(key, val) {
     if (!_sb || !_online) return;
     var tabela = SYNC_MAP[key];
     if (!tabela) return;
     try {
       var payload = {
-        chave:        key,
+        chave:        _chaveNs(key),
         dados:        val,              // jsonb
         atualizado_em: new Date().toISOString()
       };
@@ -194,7 +199,7 @@ window.COOKCONTROL_CONFIG = {
         var { data, error } = await _sb
           .from(tabela)
           .select("dados")
-          .eq("chave", key)
+          .eq("chave", _chaveNs(key))
           .maybeSingle();
         if (!error && data && data.dados !== undefined) {
           localStorage.setItem("solbahia_" + key, JSON.stringify(data.dados));
@@ -1106,8 +1111,26 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
     .pill.off:hover{background:#e5e7eb}
     #_maq_full_modal button:active{transform:scale(.95)}
   </style><script>console.log("%c[BEACH FAROL] build 2026-09-18 19:59 UTC — cat-nav estático removido, 188 fotos + banner + logo embutidos", "background:#0f2340;color:#fff;padding:4px 8px;border-radius:4px;font-weight:bold");</script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body class="sir-livre cc-modo-cliente">
+<!-- ═══ TOTEM DE LOCALIZAÇÃO — tela pública, só leitura (?totem=1) ═══
+     Fica desligada por padrão; só aparece quando a URL tem ?totem=1,
+     pensada pra rodar sozinha numa tela/tablet fixado na entrada. -->
+<div id="cc-totem-tela" style="display:none;position:fixed;inset:0;z-index:99998;background:#0f2340;flex-direction:column">
+  <div style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;background:#0f2340;color:#fff;flex:0 0 auto">
+    <strong style="font-size:1.1rem">📍 Onde estão as mesas agora</strong>
+    <div style="display:flex;gap:14px;font-size:.85rem;flex-wrap:wrap">
+      <span>🟢 Livre</span><span>🟡 Ocupada</span><span>🔵 Pedido feito</span>
+    </div>
+  </div>
+  <div id="cc-totem-mapa" style="flex:1 1 auto;width:100%"></div>
+  <div style="padding:8px 20px;background:#0f2340;color:#94a3b8;font-size:.72rem;text-align:center;flex:0 0 auto">
+    Posição aproximada (GPS de celular, ±15-30 m) — confirme pelo número da mesa ao chegar perto. Atualiza sozinho.
+  </div>
+</div>
+
 <!-- ╔══════════════════════════════════════════════════════════╗ -->
 <!-- ║  BANNER INSTITUCIONAL DA CAPA — identidade visual da casa  ║ -->
 <!-- ║  Fica no topo absoluto da tela de abertura (dono e         ║ -->
@@ -2013,6 +2036,10 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
 </div>
 </div>
 <div class="mt-4">
+<p class="text-sm font-bold text-gray-700 mb-2">Seu nome <span class="font-normal text-gray-400">(opcional, ajuda o garçom a identificar seu pedido na mesa)</span></p>
+<input class="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-orange-400 placeholder:text-gray-400" id="cc-nome-cliente" placeholder="Ex: Carlos" maxlength="30" type="text"/>
+</div>
+<div class="mt-4">
 <p class="text-sm font-bold text-gray-700 mb-2">Observações</p>
 <textarea class="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-orange-400 placeholder:text-gray-400" id="obs-txt" placeholder="Ex: sem pimenta, sem coentro…" rows="2"></textarea>
 </div>
@@ -2433,6 +2460,8 @@ let categorias = (function(){
 let config     = carregar("config", DEFAULT_CONFIG);
 let historico  = carregar("historico", []); // [{id,data,mesa,itens,total,pag}]
 let mesaStatus = carregar("mesaStatus", {}); // {1: "livre"|"ocupada"|"conta"}
+let mesaGeo    = {};                          // {1: {lat,lng}} -- posição da mesa/guarda-sol no mapa (não da pessoa), só em memória (vem do pull/realtime do Supabase)
+let mesaGeoDia = carregar("mesaGeoDia", {});  // {1: "2026-09-21"} -- guarda se já capturamos a posição dessa mesa HOJE, pra não pedir geolocalização de novo a cada pedido
 
 const S = {
   cart: {}, cat: (categorias[0] && categorias[0].id) || "all", taxa: false, pag: "pix", mesa: null, busca: "",
@@ -3034,8 +3063,41 @@ function renderPedidosAguardandoPagamento() {
     </div>`).join("");
 }
 
+// ─── NÚMERO SEQUENCIAL DE PEDIDO (#1002, #1003...) ────────────────
+// Único de verdade mesmo com vários celulares pedindo ao mesmo tempo:
+// usa o auto-incremento atômico do Postgres (bigserial), não um
+// contador guardado no navegador -- contador local colidiria entre
+// aparelhos diferentes.
+async function ccProximoNumeroPedido(mesa, nome) {
+  const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+  try {
+    if (typeof supabase !== "undefined" && window.COOKCONTROL_CONFIG) {
+      const sb = supabase.createClient(window.COOKCONTROL_CONFIG.supabaseUrl, window.COOKCONTROL_CONFIG.supabaseKey);
+      const { data, error } = await sb.from("pedidos_sequencia")
+        .insert({ empresa_id: empresaId, mesa: String(mesa), nome: nome || null })
+        .select("id").single();
+      if (!error && data && data.id) return 1000 + Number(data.id);
+    }
+  } catch (e) { console.warn("[Núm. pedido] Falha no servidor, usando fallback local:", e.message); }
+  // Fallback offline: só entra aqui sem internet/Supabase fora do ar --
+  // pode colidir com outro aparelho nesse cenário raro, mas o pedido
+  // não pode travar por causa de um número bonito.
+  const local = (carregar("proximoNumeroPedidoLocal", 1000)) + 1;
+  salvar("proximoNumeroPedidoLocal", local);
+  return local;
+}
+
 function enviarPedido() {
   if(!S.mesa) return;
+  const nomeInput = document.getElementById("cc-nome-cliente");
+  const nomeCliente = nomeInput ? nomeInput.value.trim() : "";
+  if (nomeCliente) salvar("cc_ultimo_nome_cliente", nomeCliente); // lembra pra próxima vez neste aparelho
+  ccProximoNumeroPedido(S.mesa, nomeCliente).then(function (numeroPedido) {
+    _enviarPedidoComNumero(numeroPedido, nomeCliente);
+  });
+}
+
+function _enviarPedidoComNumero(numeroPedido, nomeCliente) {
   const sub = cartTotal(), fee = S.taxa ? sub*0.1 : 0, tot = sub+fee;
   const payNames = {pix:"Pix",credito:"Cartão de Crédito",debito:"Cartão de Débito",dinheiro:"Dinheiro"};
   const obs = document.getElementById("obs-txt").value.trim();
@@ -3044,6 +3106,8 @@ function enviarPedido() {
   // Registrar no histórico
   const registro = {
     id: "PED_" + Date.now(),
+    numero: numeroPedido,          // identificador principal pro caixa/cozinha -- #1002, #1003...
+    nome: nomeCliente || "",       // opcional -- ajuda a identificar QUEM pediu dentro da mesma mesa
     data: new Date().toISOString(),
     mesa: S.mesa,
     pag: S.pag,
@@ -3068,7 +3132,7 @@ function enviarPedido() {
 
   // Montar resumo
   let txt = `━━━━━━━━━━━━━━━━━━━━━━\n  ${config.nome}\n  ${config.local}\n━━━━━━━━━━━━━━━━━━━━━━\n`;
-  txt += `Pedido: ${registro.id}\nMesa: ${String(S.mesa).padStart(2,"0")}\nPagamento: ${payNames[S.pag]}\n──────────────────────\n`;
+  txt += `Pedido #${registro.numero}\\nMesa: ${String(S.mesa).padStart(2,"0")}${registro.nome ? " · "+registro.nome : ""}\\nPagamento: ${payNames[S.pag]}\\n──────────────────────\\n`;
   registro.itens.forEach(it => { txt += `${it.q}× ${it.nome}\n   ${fmtBRL(it.preco)} × ${it.q} = ${fmtBRL(it.preco*it.q)}\n`; });
   txt += `──────────────────────\nSubtotal:  ${fmtBRL(sub)}`;
   if(S.taxa) txt += `\nTaxa (10%): ${fmtBRL(fee)}`;
@@ -6070,8 +6134,9 @@ function renderCozinha() {
     card.className = "kds-card " + stCls + (urgente?" urgente":"");
     card.innerHTML = `
       <div class="kds-card-head">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="kds-mesa-badge">Mesa ${String(ped.mesa).padStart(2,"0")}</span>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${ped.numero?`<span class="kds-mesa-badge" style="background:#0f2340">#${ped.numero}</span>`:""}
+          <span class="kds-mesa-badge">Mesa ${String(ped.mesa).padStart(2,"0")}${ped.nome?" · "+ped.nome:""}</span>
           ${urgente?'<span class="kds-badge-urgente">⚡ URGENTE</span>':""}
         </div>
         <div style="text-align:right">
@@ -6241,12 +6306,21 @@ function renderAtendente() {
       <div class="flex gap-2 flex-wrap">
         ${temPronto?`<button onclick="ccMarcarEntregueMesa(${num})" class="btn-primary text-xs py-2 px-3 flex-1" style="background:#16a34a">✓ Marcar como Entregue</button>`:""}
         ${isConta||temPronto?`<button onclick="abrirMaquininhaMesa(${num})" class="btn-primary text-xs py-2 px-3 flex-1">💳 Cobrar</button>`:""}
+        ${mesaGeo[num]?`<button onclick="ccAbrirLocalizacaoMesa(${num})" class="btn-primary text-xs py-2 px-3" style="background:#0891b2">📍 Localizar</button>`:""}
         <button onclick="setMesaStatus(${num},'conta')" class="btn-ghost text-xs py-2 px-3" style="color:#dc2626;border-color:#dc2626">💳 Conta</button>
         <button onclick="setMesaStatus(${num},'livre')" class="btn-ghost text-xs py-2 px-3">🟢 Liberar</button>
         <button onclick="ccCorrigirSessaoMesa(${num})" class="btn-ghost text-xs py-2 px-3" title="Some pedidos de dias anteriores continuam somando na conta desta mesa? Clique aqui pra descartar só o que é antigo, mantendo os pedidos de hoje.">🔄 Corrigir Sessão</button>
       </div>`;
     grid.appendChild(card);
   });
+}
+
+// Abre o Google Maps com a coordenada da mesa (capturada uma vez, na
+// abertura do dia) -- guia o garçom até o guarda-sol/mesa certos.
+function ccAbrirLocalizacaoMesa(num) {
+  const g = mesaGeo[num];
+  if (!g) { if (typeof toast === "function") toast("Ainda não temos a localização desta mesa."); return; }
+  window.open(`https://www.google.com/maps/search/?api=1&query=${g.lat},${g.lng}`, "_blank");
 }
 
 // ─── PATCH: enviarPedido → sync cozinha ─────────────────────────
@@ -12642,6 +12716,33 @@ async function ccAtualizarMesaSupabase(empresaId, numeroMesa, status, total) {
   }, "empresa_id,numero");
 }
 
+// ─── GEOLOCALIZAÇÃO DA MESA (não da pessoa) ──────────────────────
+// Captura só a posição do guarda-sol/mesa em si, uma vez por dia, no
+// momento em que a mesa sai de "livre" pela primeira vez naquele dia
+// (não a cada pedido -- a mesa não anda, só muda de lugar de um dia
+// pro outro). Some quando a mesa fecha, porque no dia seguinte pode
+// estar armada em outro canto da praia/salão.
+async function ccGravarGeoMesa(numero, lat, lng) {
+  const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+  if (!empresaId) return;
+  await ccEscreverComResiliencia("mesas",
+    { empresa_id: empresaId, numero: Number(numero), latitude: lat, longitude: lng },
+    "empresa_id,numero");
+}
+function ccCapturarGeoMesa(numero) {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      mesaGeo[numero] = coords;
+      ccGravarGeoMesa(numero, coords.lat, coords.lng);
+      if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
+    },
+    function (err) { console.warn("[Geo mesa] não capturou posição:", err.message); },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
 // ─── FONTE ÚNICA DE VERDADE — toda mudança de status de mesa passa por
 // aqui: atualiza local (pra tela responder na hora) E o Supabase (pra
 // sincronizar com outros dispositivos). Substitui os 7 pontos que antes
@@ -12655,6 +12756,18 @@ function ccSetMesaStatus(numero, status, total) {
   }
   const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
   if (empresaId) ccAtualizarMesaSupabase(empresaId, Number(numero), status, total || 0);
+
+  const hoje = new Date().toISOString().slice(0, 10);
+  if (status === "livre") {
+    delete mesaGeo[numero];
+    delete mesaGeoDia[numero];
+    salvar("mesaGeoDia", mesaGeoDia);
+    ccGravarGeoMesa(numero, null, null); // limpa no servidor -- amanhã a mesa pode estar em outro lugar
+  } else if (mesaGeoDia[numero] !== hoje) {
+    mesaGeoDia[numero] = hoje;
+    salvar("mesaGeoDia", mesaGeoDia);
+    ccCapturarGeoMesa(numero);
+  }
 }
 
 let _ccCanalMesasRealtime = null;
@@ -12684,13 +12797,15 @@ async function ccIniciarEscutaMesasRealtime() {
   // um garçom abrindo o tablet depois que a mesa já ficou ocupada no
   // celular do cliente nunca ficaria sabendo.
   try {
-    const { data, error } = await sb.from("mesas").select("numero,status").eq("empresa_id", empresaId);
+    const { data, error } = await sb.from("mesas").select("numero,status,latitude,longitude").eq("empresa_id", empresaId);
     if (!error && Array.isArray(data)) {
       data.forEach(linha => {
         const statusLocal = linha.status === "pronto_entrega" ? "conta"
           : linha.status === "chamando_garcom" ? "ocupada"
           : linha.status;
         if (statusLocal) mesaStatus[linha.numero] = statusLocal;
+        mesaGeo[linha.numero] = (linha.latitude != null && linha.longitude != null)
+          ? { lat: linha.latitude, lng: linha.longitude } : null;
       });
       salvar("mesaStatus", mesaStatus);
       if (typeof S !== "undefined" && S.viewAtual === "atendente" && typeof renderAtendente === "function") renderAtendente();
@@ -12724,6 +12839,11 @@ async function ccIniciarEscutaMesasRealtime() {
           : linha.status;
         mesaStatus[linha.numero] = statusLocal;
         salvar("mesaStatus", mesaStatus);
+        if (linha.latitude != null && linha.longitude != null) {
+          mesaGeo[linha.numero] = { lat: linha.latitude, lng: linha.longitude };
+        } else if ("latitude" in linha) {
+          delete mesaGeo[linha.numero];
+        }
         if (typeof renderAtendente === "function" && S.viewAtual === "atendente") renderAtendente();
         if (typeof renderMesaGrid === "function" && S.viewAtual === "mesas") renderMesaGrid();
       }
@@ -13242,6 +13362,14 @@ function ccAplicarIconesAbasCliente() {
   });
 }
 document.addEventListener("DOMContentLoaded", ccAplicarIconesAbasCliente);
+
+// Lembra o nome do cliente entre pedidos, no mesmo aparelho (não obrigatório digitar de novo a cada pedido)
+document.addEventListener("DOMContentLoaded", function () {
+  var campo = document.getElementById("cc-nome-cliente");
+  var ultimo = carregar("cc_ultimo_nome_cliente", "");
+  if (campo && ultimo) campo.value = ultimo;
+});
+
 
 
 function ccRequerPrePago(mesa) {
@@ -19760,4 +19888,98 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   }
 }
 </style>
+<script>
+// ═══ TOTEM DE LOCALIZAÇÃO (?totem=1) — mapa público, só leitura ══════
+// Pensado pra ficar ligado sozinho numa tela/tablet na entrada. Não usa
+// nada do SupaSync (que exige o app do cliente/admin já ter iniciado):
+// cria seu próprio cliente Supabase direto, igual a campainha já faz.
+(function () {
+  function ehTotem() {
+    try { return new URLSearchParams(location.search).get("totem") === "1"; }
+    catch (e) { return false; }
+  }
+  if (!ehTotem()) return;
+
+  var CORES = { livre: "#16a34a", ocupada: "#eab308", conta: "#2563eb" };
+  var LEGENDA = { livre: "🟢 Livre", ocupada: "🟡 Ocupada", conta: "🔵 Pedido feito" };
+
+  function iniciar() {
+    var tela = document.getElementById("cc-totem-tela");
+    if (tela) tela.style.display = "flex";
+    document.body.style.overflow = "hidden";
+
+    if (typeof L === "undefined") {
+      console.warn("[Totem] Leaflet não carregou -- sem internet ou CDN bloqueado.");
+      return;
+    }
+    if (typeof supabase === "undefined" || !window.COOKCONTROL_CONFIG) {
+      console.warn("[Totem] Supabase indisponível.");
+      return;
+    }
+    var sb = supabase.createClient(window.COOKCONTROL_CONFIG.supabaseUrl, window.COOKCONTROL_CONFIG.supabaseKey);
+    var empresaId = window.COOKCONTROL_CONFIG.empresaId;
+
+    var mapa = L.map("cc-totem-mapa");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 21,
+      attribution: "© OpenStreetMap"
+    }).addTo(mapa);
+
+    var marcadores = {}; // numero -> L.marker
+
+    function iconePara(status) {
+      var cor = CORES[status] || "#64748b";
+      return L.divIcon({
+        className: "",
+        html: '<div style="background:' + cor + ';width:34px;height:34px;border-radius:50% 50% 50% 0;' +
+          'transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);' +
+          'display:flex;align-items:center;justify-content:center">' +
+          '<span style="transform:rotate(45deg);color:#fff;font-weight:900;font-size:13px"></span></div>',
+        iconSize: [34, 34], iconAnchor: [17, 34]
+      });
+    }
+
+    function redesenhar(linhas) {
+      var pontos = [];
+      linhas.forEach(function (l) {
+        if (l.latitude == null || l.longitude == null) return;
+        pontos.push([l.latitude, l.longitude]);
+        var status = l.status === "pronto_entrega" ? "conta" : (l.status === "chamando_garcom" ? "ocupada" : (l.status || "livre"));
+        var icone = iconePara(status);
+        if (marcadores[l.numero]) {
+          marcadores[l.numero].setLatLng([l.latitude, l.longitude]).setIcon(icone);
+        } else {
+          marcadores[l.numero] = L.marker([l.latitude, l.longitude], { icon: icone }).addTo(mapa);
+        }
+        marcadores[l.numero].bindPopup("<b>Mesa " + l.numero + "</b><br>" + (LEGENDA[status] || status));
+      });
+      // remove mesas que sumiram (ficaram sem coordenada)
+      Object.keys(marcadores).forEach(function (num) {
+        var aindaExiste = linhas.some(function (l) { return String(l.numero) === String(num) && l.latitude != null; });
+        if (!aindaExiste) { mapa.removeLayer(marcadores[num]); delete marcadores[num]; }
+      });
+      if (pontos.length) mapa.fitBounds(pontos, { padding: [40, 40], maxZoom: 19 });
+      else mapa.setView([-12.9777, -38.3559], 15); // Salvador, ponto de partida se ainda não há nenhuma mesa aberta
+    }
+
+    async function carregar() {
+      try {
+        var { data, error } = await sb.from("mesas").select("numero,status,latitude,longitude").eq("empresa_id", empresaId);
+        if (!error && Array.isArray(data)) redesenhar(data);
+      } catch (e) { console.warn("[Totem] Falha ao carregar mesas:", e.message); }
+    }
+
+    carregar();
+    setInterval(carregar, 15000); // atualização por segurança, mesmo se o realtime falhar
+    try {
+      sb.channel("cc-totem-mesas")
+        .on("postgres_changes", { event: "*", schema: "public", table: "mesas", filter: "empresa_id=eq." + empresaId }, carregar)
+        .subscribe();
+    } catch (e) { console.warn("[Totem] Realtime indisponível, seguindo só com polling:", e.message); }
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", iniciar);
+  else iniciar();
+})();
+</script>
 </body></html>
