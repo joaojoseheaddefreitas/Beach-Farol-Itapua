@@ -6247,92 +6247,281 @@ function renderAtendente() {
       </span>`).join("");
   }
 
-  // Grid de mesas
-  const mesasAtivas = Object.entries(mesaStatus).filter(([,s])=>s!=="livre");
+  // ═══ MAPA VISUAL INTEGRADO DE MESAS (Salão Coberto · Varanda · Areia) ═══
+  _ccInjetarEstiloMapaMesas();
   const grid  = el("at-mesas-grid");
   const empty = el("at-empty");
   if(!grid) return;
-  grid.innerHTML = "";
-  if(!mesasAtivas.length){ empty&&empty.classList.remove("hidden"); return; }
-  empty&&empty.classList.add("hidden");
+  empty && empty.classList.add("hidden");
+  grid.className = "cc-mapa";
+  if (!_ccMapaArrastando) grid.innerHTML = _ccMontarMapaMesasHTML();
+}
 
-  mesasAtivas.forEach(([numStr,status])=>{
-    const num = parseInt(numStr);
-    const pedsMesa = pedidosCozinha.filter(p=>p.mesa===num&&p.status!=="entregue");
-    const ultimoPed = pedsMesa[0];
-    const isConta = status==="conta";
-    const temPronto = pedsMesa.some(p=>p.status==="pronto");
-    const borderCor = isConta?"#dc2626":temPronto?"#22c55e":"#ea580c";
+// ═══════════════════════════════════════════════════════════════════
+// RADAR DINÂMICO DO GARÇOM — tela livre, sem grade.
+//  • Cada mesa é um bloco posicionado pelas coordenadas GPS de quando foi
+//    armada hoje (mesaGeo) — ou por onde o dono arrastou (mapaGeoOverride).
+//  • O número da mesa é só a IDENTIDADE (vem do QR); a POSIÇÃO é sempre a
+//    real do dia. Mesas juntadas viram um bloco só (mapaJuncao).
+//  • O sinal do celular do cliente (mesaGeoCliente, gravado no instante do
+//    "Confirmar Pedido"/"Campainha") aparece como marcador 📡 ao vivo.
+// ═══════════════════════════════════════════════════════════════════
+let mapaGeoOverride = carregar("mapaGeoOverride", {}); // {num:{lat,lng}} posição ajustada pelo dono
+let mapaJuncao      = carregar("mapaJuncao", {});      // {secundaria: principal}
+let _ccMapaSel = null, _ccMapaMover = false, _ccMapaTodas = false, _ccMapaArrastando = false;
+let _ccMapaFrameAtual = null, _ccMapaPrimeiro = true;
+const _ccMapaVistos = {};
+const _ccEsc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-    const statusPedLabel = !pedsMesa.length?"Sem pedidos ativos"
-      :temPronto?"✅ Pronto p/ entregar"
-      :pedsMesa.some(p=>p.status==="preparo")?"🍳 Preparando..."
-      :"🟡 Aguardando cozinha";
+function _ccInjetarEstiloMapaMesas() {
+  if (document.getElementById("cc-mapa-estilo")) return;
+  const st = document.createElement("style");
+  st.id = "cc-mapa-estilo";
+  st.textContent = `
+  .cc-mapa{display:flex;flex-direction:column;gap:10px}
+  .cc-tb{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .cc-tb button{border:0;border-radius:10px;padding:6px 10px;font-size:.7rem;font-weight:800;background:#e2e8f0;color:#334155;cursor:pointer}
+  .cc-tb button.on{background:#0ea5e9;color:#fff}
+  .cc-alertas{display:flex;flex-wrap:wrap;gap:6px}
+  .cc-chip{border:0;border-radius:999px;padding:6px 12px;font-size:.72rem;font-weight:900;cursor:pointer;color:#fff}
+  .cc-chip.pedido{background:#dc2626;animation:ccPulse .8s infinite}.cc-chip.campainha{background:#f59e0b;color:#422006;animation:ccPulse .8s infinite}
+  @keyframes ccPulse{50%{opacity:.55}}
+  .cc-canvas{position:relative;width:100%;aspect-ratio:4/3;max-height:72vh;border-radius:18px;overflow:hidden;border:2px solid #e2c98a;
+    background:radial-gradient(circle at 20% 30%,rgba(255,255,255,.35) 0 2px,transparent 3px) 0 0/26px 26px,linear-gradient(180deg,#fbf0c9,#f4dfa4);touch-action:none}
+  .cc-canvas.mover{outline:3px dashed #0ea5e9;outline-offset:-6px}
+  .cc-canvas svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .cc-norte{position:absolute;right:8px;top:6px;font-size:.62rem;font-weight:900;color:#8a6a12}
+  .cc-escala{position:absolute;left:10px;bottom:8px;font-size:.6rem;font-weight:800;color:#8a6a12}
+  .cc-escala i{display:block;height:4px;border:2px solid #8a6a12;border-top:0;margin-bottom:2px}
+  .cc-puck{position:absolute;transform:translate(-50%,-50%);min-width:46px;height:46px;padding:0 8px;border-radius:23px;background:#fff;border:3px solid #94a3b8;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;font-weight:900;font-size:.85rem;line-height:1;color:#0f2340;box-shadow:0 3px 8px rgba(0,0,0,.3);cursor:pointer;touch-action:none;user-select:none;z-index:3}
+  .cc-puck small{font-size:.5rem;font-weight:800;margin-top:2px}
+  .cc-puck.estim{border-style:dashed}
+  .cc-puck.sel{outline:4px solid #0ea5e9;z-index:5}
+  .cc-p-livre{opacity:.75}.cc-p-ocupada{border-color:#ea580c;background:#fff7ed}.cc-p-pronto{border-color:#16a34a;background:#dcfce7}.cc-p-conta{border-color:#7c3aed;background:#ede9fe}
+  .cc-p-pedido{border-color:#dc2626;animation:ccBlinkRed .8s infinite}.cc-p-campainha{border-color:#f59e0b;animation:ccBlinkYellow .8s infinite}
+  @keyframes ccBlinkRed{0%,100%{background:#fff;box-shadow:0 0 0 0 rgba(220,38,38,0)}50%{background:#ef4444;color:#fff;box-shadow:0 0 0 10px rgba(220,38,38,.45)}}
+  @keyframes ccBlinkYellow{0%,100%{background:#fff;box-shadow:0 0 0 0 rgba(245,158,11,0)}50%{background:#fde047;box-shadow:0 0 0 10px rgba(245,158,11,.55)}}
+  .cc-cli{position:absolute;transform:translate(-50%,-50%);z-index:4;pointer-events:none;text-align:center}
+  .cc-cli b{display:block;width:20px;height:20px;border-radius:50%;margin:0 auto;border:3px solid #fff;box-shadow:0 0 0 0 currentColor;animation:ccRadar 1.4s infinite}
+  .cc-cli span{display:inline-block;margin-top:2px;padding:1px 6px;border-radius:8px;background:rgba(15,35,64,.88);color:#fff;font-size:.58rem;font-weight:800;white-space:nowrap}
+  @keyframes ccRadar{0%{box-shadow:0 0 0 0 currentColor}100%{box-shadow:0 0 0 22px transparent}}
+  .cc-folha{background:#fff;border:2px solid #cbd5e1;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .cc-folha h5{font-weight:900;color:#0f2340;font-size:.95rem}
+  .cc-folha p{font-size:.72rem;color:#475569}
+  .cc-btns{display:flex;flex-wrap:wrap;gap:6px}
+  .cc-btns button{border:0;border-radius:10px;padding:8px 11px;font-size:.74rem;font-weight:800;color:#fff;cursor:pointer}
+  .cc-btns .e{background:#16a34a}.cc-btns .c{background:#ea580c}.cc-btns .r{background:#64748b}.cc-btns .l{background:#e2e8f0;color:#334155}.cc-btns .k{background:#f59e0b}.cc-btns .m{background:#0ea5e9}
+  .cc-leg{font-size:.62rem;font-weight:700;color:#64748b}
+  `;
+  document.head.appendChild(st);
+}
 
-    // MODO SMART LINK: mesa chamando o garçom pra passar o cartão —
-    // pisca em âmbar/amarelo (sinal de campainha) com o valor total em
-    // destaque, por cima do estado normal.
-    const chamandoGarcom = _ccMesasChamandoGarcom.has(num);
-    // Sinal de confirmação combinado: pedido novo ainda não puxado pela
-    // cozinha pisca em vermelho; qualquer sinal de campainha (FAB ou
-    // smart link) pisca em amarelo. Não substitui nada do estado normal
-    // da mesa -- é só um destaque visual em cima.
-    const sinalTipo = _ccMesasSinalTipo[num];
-    // O vermelho de "pedido" segue o status real da cozinha (pendente),
-    // que já se resolve sozinho quando a cozinha avança o pedido -- não
-    // depende do sinal de GPS, que é só um anexo pro atendente localizar
-    // o cliente. Assim nunca fica piscando vermelho "preso".
-    const pedidoPiscando = pedsMesa.some(p=>p.status==="pendente");
-    const campainhaPiscando = chamandoGarcom || sinalTipo==="campainha";
+const _ccGrupoMesa = p => [Number(p)]; // mesas juntadas usam UM número/QR só; vários clientes no mesmo QR dividem a conta no fechamento
+const _ccPosMesa = n => mapaGeoOverride[n] || mesaGeo[n] || null;
 
-    const card = document.createElement("div");
-    card.className="admin-card";
-    card.style.borderLeft = `4px solid ${
-      chamandoGarcom ? "#f59e0b"
-      : campainhaPiscando ? "#f59e0b"
-      : pedidoPiscando ? "#dc2626"
-      : borderCor}`;
-    card.style.position="relative";
-    if(temPronto) card.style.boxShadow="0 0 0 3px rgba(34,197,94,.2)";
-    if(chamandoGarcom || campainhaPiscando || pedidoPiscando) card.style.animation = "pulse 1s infinite";
+function _ccEstadoGrupo(p) {
+  const g = _ccGrupoMesa(p);
+  const peds = pedidosCozinha.filter(x => g.includes(x.mesa) && x.status !== "entregue");
+  const cham = g.some(n => _ccMesasChamandoGarcom.has(n));
+  const total = cham ? g.reduce((a, n) => a + (Number(_ccMesasChamandoGarcomTotal[n]) || 0), 0)
+                     : peds.reduce((a, x) => a + (Number(x.total) || 0), 0);
+  return {
+    g, peds, cham, total,
+    conta: g.some(n => mesaStatus[n] === "conta"),
+    pronto: peds.some(x => x.status === "pronto"),
+    novo: peds.some(x => x.status === "pendente"),
+    camp: cham || g.some(n => _ccMesasSinalTipo[n] === "campainha"),
+    ativa: g.some(n => (mesaStatus[n] || "livre") !== "livre") || peds.length > 0,
+    sinalN: g.find(n => mesaGeoCliente[n])
+  };
+}
 
-    card.innerHTML = chamandoGarcom ? `
-      <div class="flex items-center justify-between mb-2">
-        <span class="font-black text-base" style="color:#0f2340">Mesa ${String(num).padStart(2,"0")}</span>
-        <span class="badge" style="background:#fef3c7;color:#92400e">🔔 Chamando garçom</span>
-      </div>
-      <p class="text-xs font-bold mb-2" style="color:#92400e">Cliente quer pagar no cartão, direto na maquininha</p>
-      <p class="text-3xl font-black text-center my-3" style="color:#92400e">${fmtBRL(_ccMesasChamandoGarcomTotal[num] || (ultimoPed?ultimoPed.total:0))}</p>
-      <button onclick="ccConfirmarPagamentoSmartLink(${num})" class="btn-primary w-full text-sm py-2" style="background:#f59e0b">
-        ✅ Já passei o cartão — Confirmar Pagamento
-      </button>
-      ${mesaGeoCliente[num]?`<button onclick="ccAbrirSinalClienteMesa(${num})" class="btn-ghost w-full text-xs py-2 mt-2">📡 Ver sinal de GPS do cliente</button>`:""}
-    ` : `
-      <div class="flex items-center justify-between mb-2">
-        <span class="font-black text-base" style="color:#0f2340">Mesa ${String(num).padStart(2,"0")}</span>
-        <span class="badge" style="${isConta?"background:#fee2e2;color:#dc2626":"background:#fff7ed;color:#ea580c"}">
-          ${isConta?"💳 Conta":"🟠 Ocupada"}
-        </span>
-      </div>
-      <p class="text-xs font-bold mb-2" style="color:${borderCor}">${statusPedLabel}</p>
-      ${ultimoPed?`
-        ${ultimoPed.numero?`<p class="text-xs font-black mb-1" style="color:#0f2340">#${ultimoPed.numero}${ultimoPed.nome?" · "+ultimoPed.nome:""}</p>`:""}
-        <div class="text-xs text-gray-500 mb-1 leading-relaxed">
-          ${ultimoPed.itens.slice(0,3).map(i=>`${i.q}× ${i.nome}`).join(" · ")}${ultimoPed.itens.length>3?"…":""}
-        </div>
-        <p class="text-xs text-gray-400 mb-3">Total: <strong class="text-orange-600">${fmtBRL(ultimoPed.total)}</strong></p>
-      `:"<p class='text-xs text-gray-400 mb-3'>—</p>"}
-      <div class="flex gap-2 flex-wrap">
-        ${temPronto?`<button onclick="ccMarcarEntregueMesa(${num})" class="btn-primary text-xs py-2 px-3 flex-1" style="background:#16a34a">✓ Marcar como Entregue</button>`:""}
-        ${isConta||temPronto?`<button onclick="abrirMaquininhaMesa(${num})" class="btn-primary text-xs py-2 px-3 flex-1">💳 Cobrar</button>`:""}
-        ${mesaGeo[num]?`<button onclick="ccAbrirLocalizacaoMesa(${num})" class="btn-primary text-xs py-2 px-3" style="background:#0891b2">📍 Localizar</button>`:""}
-        ${mesaGeoCliente[num]?`<button onclick="ccAbrirSinalClienteMesa(${num})" class="btn-primary text-xs py-2 px-3" style="background:#f59e0b">📡 Sinal do Cliente</button>`:""}
-        <button onclick="setMesaStatus(${num},'conta')" class="btn-ghost text-xs py-2 px-3" style="color:#dc2626;border-color:#dc2626">💳 Conta</button>
-        <button onclick="setMesaStatus(${num},'livre')" class="btn-ghost text-xs py-2 px-3">🟢 Liberar</button>
-        <button onclick="ccCorrigirSessaoMesa(${num})" class="btn-ghost text-xs py-2 px-3" title="Some pedidos de dias anteriores continuam somando na conta desta mesa? Clique aqui pra descartar só o que é antigo, mantendo os pedidos de hoje.">🔄 Corrigir Sessão</button>
-      </div>`;
-    grid.appendChild(card);
+function _ccMapaFrame(pts) {
+  const W = 400, H = 300;
+  const base = pts.length ? pts : [{ lat: -12.9714, lng: -38.5014 }];
+  const lats = base.map(q => q.lat), lngs = base.map(q => q.lng);
+  const lat0 = (Math.min(...lats) + Math.max(...lats)) / 2, lng0 = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+  const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 111320;
+  const spanX = Math.max((Math.max(...lngs) - Math.min(...lngs)) * kx, 25);
+  const spanY = Math.max((Math.max(...lats) - Math.min(...lats)) * ky, 25 * H / W);
+  const scale = Math.min(W * 0.78 / spanX, H * 0.78 / spanY); // px virtuais por metro
+  return {
+    toXY: q => ({ x: 50 + ((q.lng - lng0) * kx) * scale / W * 100, y: 50 - ((q.lat - lat0) * ky) * scale / H * 100 }),
+    inv: (x, y) => ({ lat: lat0 + ((50 - y) / 100 * H) / scale / ky, lng: lng0 + ((x - 50) / 100 * W) / scale / kx }),
+    barra10m: 10 * scale / W * 100
+  };
+}
+function _ccDistM(a, b) {
+  const R = 6371000, r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lng - a.lng) * r;
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function _ccMapaBip() {
+  try {
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    const A = window.AudioContext || window.webkitAudioContext, a = new A(), o = a.createOscillator(), g = a.createGain();
+    o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = 0.15; o.start();
+    setTimeout(() => { o.stop(); a.close(); }, 250);
+  } catch (e) {}
+}
+
+function _ccMontarMapaMesasHTML() {
+  const pad = n => String(n).padStart(2, "0");
+  const maxN = Math.max(config.numMesas || 20, ...Object.keys(mesaStatus).map(Number).filter(n => !isNaN(n)), 1);
+  const grupos = [];
+  for (let n = 1; n <= maxN; n++) {
+    const e = _ccEstadoGrupo(n);
+    const geo = e.g.map(_ccPosMesa).find(Boolean) || null;
+    if (!(_ccMapaTodas || e.ativa || geo)) continue;
+    e.p = n; e.geo = geo;
+    e.estim = !geo && e.sinalN ? mesaGeoCliente[e.sinalN] : null; // sem GPS da mesa: usa onde o cliente clicou
+    grupos.push(e);
+  }
+  const comPos = grupos.filter(e => e.geo || e.estim);
+  const semPos = grupos.filter(e => !e.geo && !e.estim);
+  const fr = _ccMapaFrame(comPos.map(e => e.geo || e.estim));
+  _ccMapaFrameAtual = fr;
+
+  // alertas + bip nos sinais novos
+  const alertas = grupos.filter(e => e.camp || e.novo).sort((a, b) => (b.camp ? 1 : 0) - (a.camp ? 1 : 0));
+  let novoSinal = false;
+  alertas.forEach(e => { const k = e.p + (e.camp ? ":c" : ":p"); if (!_ccMapaVistos[k]) { _ccMapaVistos[k] = 1; novoSinal = true; } });
+  Object.keys(_ccMapaVistos).forEach(k => { if (!alertas.some(e => e.p + (e.camp ? ":c" : ":p") === k)) delete _ccMapaVistos[k]; });
+  if (novoSinal && !_ccMapaPrimeiro) _ccMapaBip();
+  _ccMapaPrimeiro = false;
+
+  let pucks = "", marc = "", linhas = "";
+  const clamp = v => Math.min(96, Math.max(4, v));
+  comPos.forEach(e => {
+    const pt = fr.toXY(e.geo || e.estim);
+    const cls = e.camp ? "cc-p-campainha" : e.novo ? "cc-p-pedido" : e.pronto ? "cc-p-pronto" : e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
+    const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
+    pucks += `<div class="cc-puck ${cls}${e.estim ? " estim" : ""}${_ccMapaSel === e.p ? " sel" : ""}" style="left:${clamp(pt.x)}%;top:${clamp(pt.y)}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot}">${rot}${e.estim ? "<small>📡 estimada</small>" : ""}</div>`;
+    // marcador do sinal do celular (de onde partiu o clique)
+    if (e.sinalN && e.geo && (e.camp || e.peds.length)) {
+      const c = fr.toXY(mesaGeoCliente[e.sinalN]);
+      const fora = c.x < 2 || c.x > 98 || c.y < 2 || c.y > 98;
+      const cor = e.camp ? "#f59e0b" : e.novo ? "#dc2626" : "#0284c7";
+      const cx = clamp(c.x), cy = clamp(c.y);
+      linhas += `<line x1="${clamp(pt.x)}" y1="${clamp(pt.y)}" x2="${cx}" y2="${cy}" stroke="${cor}" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+      marc += `<div class="cc-cli" style="left:${cx}%;top:${cy}%;color:${cor}"><b style="background:${cor}"></b><span>📡 Cliente Mesa ${pad(e.sinalN)}${fora ? " ↗ fora da área" : ""}</span></div>`;
+    }
   });
+  semPos.forEach((e, i) => {
+    const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
+    const cls = e.camp ? "cc-p-campainha" : e.novo ? "cc-p-pedido" : e.pronto ? "cc-p-pronto" : e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
+    pucks += `<div class="cc-puck ${cls}${_ccMapaSel === e.p ? " sel" : ""}" style="left:${7 + (i % 10) * 9.5}%;top:${93 - Math.floor(i / 10) * 11}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot} — sem GPS">${rot}<small>sem GPS</small></div>`;
+  });
+
+  const chips = alertas.map(e => `<button class="cc-chip ${e.camp ? "campainha" : "pedido"}" onclick="ccMapaSelecionar(${e.p})">${e.camp ? "🔔" : "🔴"} Mesa ${e.g.map(pad).join("+")} — ${e.camp ? "CAMPAINHA" : "PEDIDO NOVO"}</button>`).join("");
+
+  // folha de detalhes/ações da mesa selecionada
+  let folha = "";
+  const sel = grupos.find(e => e.p === _ccMapaSel);
+  if (sel) {
+    const rot = sel.g.map(pad).join(" + ");
+    const itens = sel.peds.map(x => (Array.isArray(x.itens) ? x.itens.map(i => `${i.q || i.qtd || 1}x ${_ccEsc(i.nome || i.produto || "")}`).join(", ") : "")).filter(Boolean).join(" · ");
+    const desde = sel.g.map(n => mesaSessaoInicio[n]).filter(Boolean)[0];
+    const _refs = sel.peds.map(x => String(x.obs || "")).map(o => (o.match(/📍 Local:\s*([^|]*)/) || [])[1]).filter(Boolean);
+    let gpsTxt = _refs.length ? `<p style="color:#0f2340;font-weight:800">📍 O cliente informou: "${_ccEsc(_refs.join(" / "))}" (sem GPS)</p>` : `<p style="color:#64748b">📍 Destino: Mesa ${rot} (posição no mapa acima).</p>`;
+    if (sel.sinalN) {
+      const posMesa = sel.geo, cli = mesaGeoCliente[sel.sinalN];
+      const d = posMesa ? Math.round(_ccDistM(posMesa, cli)) : null;
+      gpsTxt = `<p>📡 Sinal do celular capturado no instante do ${_ccMesasSinalTipo[sel.sinalN] === "campainha" ? "toque da campainha" : "pedido"}${d != null ? ` — a <b>${d} m</b> da mesa armada.${d > 25 ? " ⚠️ Cliente longe da posição da mesa: ela pode ter sido movida." : ""}` : "."}</p>`;
+    }
+    const b = [];
+    if (sel.cham) b.push(`<button class="k" onclick="ccConfirmarPagamentoSmartLink(${sel.p})">✅ Já passei o cartão</button>`);
+    if (sel.pronto || sel.peds.length) b.push(`<button class="e" onclick="ccMapaAcao('entregue',${sel.p})">✓ Marcar Entregue</button>`);
+    if (sel.conta || sel.pronto || sel.ativa) b.push(`<button class="c" onclick="abrirMaquininhaMesa(${sel.p})">💳 Cobrar</button>`);
+    if (sel.ativa) b.push(`<button class="r" onclick="ccCorrigirSessaoMesa(${sel.p})">🔄 Corrigir Sessão</button>`);
+    if (sel.ativa && !sel.conta) b.push(`<button class="l" onclick="ccMapaAcao('conta',${sel.p})">💳 Pedir conta</button>`);
+    if (sel.ativa) b.push(`<button class="l" onclick="ccMapaAcao('livre',${sel.p})">🟢 Liberar</button>`);
+    if (sel.sinalN) {
+      b.push(`<button class="m" onclick="ccMapaPuxarParaCliente(${sel.p})">📌 Mesa está aqui (usar posição do cliente)</button>`);
+      b.push(`<button class="l" onclick="ccAbrirSinalClienteMesa(${sel.sinalN})">🗺️ Abrir no Maps</button>`);
+    }
+    if (mapaGeoOverride[sel.p]) b.push(`<button class="l" onclick="ccMapaLimparPos(${sel.p})">↺ Posição do GPS</button>`);
+    folha = `<div class="cc-folha"><h5>Mesa ${rot}${sel.total ? ` · ${fmtBRL(sel.total)}` : ""}${desde ? ` · <span class="cc-timer" data-inicio="${new Date(desde).toISOString()}" data-parado="0">⏱ 00:00</span>` : ""}</h5>
+      ${sel.peds.length ? `<p>👥 <b>${sel.peds.length} pedido(s) nesta mesa:</b><br>${sel.peds.map(x => `${x.numero ? "#" + _ccEsc(x.numero) + " " : ""}${x.nome ? _ccEsc(x.nome) + " " : ""}· ${fmtBRL(Number(x.total) || 0)} · ${_ccEsc(x.status)}`).join("<br>")}</p>` : ""}${itens ? `<p>🍽️ ${itens}</p>` : ""}${gpsTxt}<div class="cc-btns">${b.join("")}</div></div>`;
+  }
+
+  return `
+    <div class="cc-tb">
+      <button class="${_ccMapaMover ? "on" : ""}" onclick="ccMapaToggle('mover')">✋ Mover mesas: ${_ccMapaMover ? "LIGADO" : "desligado"}</button>
+      <button class="${_ccMapaTodas ? "on" : ""}" onclick="ccMapaToggle('todas')">👁 ${_ccMapaTodas ? "Todas as mesas" : "Só mesas ativas"}</button>
+      <button onclick="ccMapaResetTudo()">↺ Voltar posições do GPS</button>
+      <span class="cc-leg">🔴 pedido novo · 🟡 campainha · 🟢 pronto · 🟣 conta · 🟠 ocupada · 📡 celular do cliente</span>
+    </div>
+    ${chips ? `<div class="cc-alertas">${chips}</div>` : ""}
+    <div class="cc-canvas${_ccMapaMover ? " mover" : ""}" id="cc-canvas">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none">${linhas}</svg>
+      <div class="cc-norte">N ↑</div>
+      <div class="cc-escala"><i style="width:${fr.barra10m}%;min-width:20px"></i>10 m</div>
+      ${marc}${pucks}
+      ${grupos.length ? "" : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8a6a12;font-weight:800;font-size:.8rem;text-align:center;padding:20px">Nenhuma mesa armada ainda.<br>As mesas aparecem aqui quando o cliente escaneia o QR.</div>`}
+    </div>
+    ${folha}`;
+}
+
+// ── interações do radar ──────────────────────────────────────────
+function ccMapaPD(ev, n) {
+  ev.preventDefault();
+  const el = ev.currentTarget, cv = el.parentElement, r = cv.getBoundingClientRect();
+  let moved = false, fx = 0, fy = 0;
+  _ccMapaArrastando = true;
+  try { el.setPointerCapture(ev.pointerId); } catch (e) {}
+  const mv = e => {
+    if (!_ccMapaMover) return;
+    fx = Math.min(96, Math.max(4, (e.clientX - r.left) / r.width * 100));
+    fy = Math.min(96, Math.max(4, (e.clientY - r.top) / r.height * 100));
+    if (Math.abs(e.clientX - ev.clientX) + Math.abs(e.clientY - ev.clientY) > 6) moved = true;
+    el.style.left = fx + "%"; el.style.top = fy + "%";
+  };
+  const up = () => {
+    el.removeEventListener("pointermove", mv); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+    _ccMapaArrastando = false;
+    if (moved && _ccMapaFrameAtual) {
+      mapaGeoOverride[n] = _ccMapaFrameAtual.inv(fx, fy);
+      salvar("mapaGeoOverride", mapaGeoOverride);
+    } else { _ccMapaSel = (_ccMapaSel === n ? null : n); }
+    renderAtendente();
+  };
+  el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+}
+function ccMapaSelecionar(n) { _ccMapaSel = n; renderAtendente(); }
+function ccMapaToggle(w) { if (w === "mover") _ccMapaMover = !_ccMapaMover; else _ccMapaTodas = !_ccMapaTodas; renderAtendente(); }
+function ccMapaResetTudo() {
+  if (!confirm("Voltar todas as mesas para a posição capturada pelo GPS (desfaz as posições arrastadas)?")) return;
+  mapaGeoOverride = {}; salvar("mapaGeoOverride", mapaGeoOverride); renderAtendente();
+}
+function ccMapaLimparPos(n) { delete mapaGeoOverride[n]; salvar("mapaGeoOverride", mapaGeoOverride); renderAtendente(); }
+function ccMapaPuxarParaCliente(p) {
+  const e = _ccEstadoGrupo(p), c = e.sinalN && mesaGeoCliente[e.sinalN];
+  if (!c) return;
+  mapaGeoOverride[p] = { lat: c.lat, lng: c.lng };
+  salvar("mapaGeoOverride", mapaGeoOverride);
+  if (typeof toast === "function") toast("Mesa " + p + " reposicionada onde o cliente está.");
+  renderAtendente();
+}
+function ccMapaJuntar(p) {
+  const v = prompt("Juntar qual mesa à Mesa " + p + "? (digite o número)");
+  const n = parseInt(v, 10);
+  if (!n || n === p) return;
+  Object.keys(mapaJuncao).forEach(k => { if (Number(mapaJuncao[k]) === n) mapaJuncao[k] = p; }); // se n já era principal, leva o grupo junto
+  delete mapaJuncao[p];
+  mapaJuncao[n] = p;
+  salvar("mapaJuncao", mapaJuncao); renderAtendente();
+}
+function ccMapaSeparar(p) {
+  Object.keys(mapaJuncao).forEach(k => { if (Number(mapaJuncao[k]) === Number(p)) delete mapaJuncao[k]; });
+  salvar("mapaJuncao", mapaJuncao); renderAtendente();
+}
+function ccMapaAcao(tipo, p) {
+  const g = _ccGrupoMesa(p);
+  if (tipo === "entregue") g.forEach(n => ccMarcarEntregueMesa(n));
+  else g.forEach(n => setMesaStatus(n, tipo));
+  if (tipo === "livre") { g.forEach(n => { delete mapaGeoOverride[n]; }); salvar("mapaGeoOverride", mapaGeoOverride); ccMapaSeparar(p); _ccMapaSel = null; }
 }
 
 // Abre o Google Maps com a coordenada da mesa (capturada uma vez, na
@@ -12848,7 +13037,7 @@ function ccIniciarRastreioSilenciosoGeoConfirmacao() {
   if (!navigator.geolocation || _ccWatchIdGeoConfirmacao !== null) return;
   _ccWatchIdGeoConfirmacao = navigator.geolocation.watchPosition(
     function (pos) {
-      _ccUltimaGeoConfirmacao = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      _ccUltimaGeoConfirmacao = { lat: pos.coords.latitude, lng: pos.coords.longitude, prec: pos.coords.accuracy, ts: Date.now() };
     },
     function (err) {
       console.warn("[Geo confirmação] watchPosition não conseguiu atualizar:", err.message);
@@ -12856,16 +13045,23 @@ function ccIniciarRastreioSilenciosoGeoConfirmacao() {
     { enableHighAccuracy: true, maximumAge: 0 }
   );
 }
-document.addEventListener("DOMContentLoaded", function () {
-  setTimeout(ccIniciarRastreioSilenciosoGeoConfirmacao, 300);
-});
+// (rastreio de fundo desativado: o celular só é localizado no instante em que o cliente aprova o pedido / toca a campainha)
 
 function ccCapturarGeoConfirmacao() {
-  // Não faz mais uma leitura nova de GPS aqui -- isso é exatamente o que
-  // causava o sinal sumir em campo (timeout antes do satélite responder no
-  // 4G/5G instável). Apenas devolve a última posição válida que o
-  // watchPosition de fundo já tinha guardada em cache, na hora, sem lag.
-  return Promise.resolve(_ccUltimaGeoConfirmacao);
+  // Chamada no instante do toque em "Confirmar Pedido"/"Campainha" (dentro do
+  // gesto do cliente). Roda em paralelo e NUNCA trava o pedido: o destino da
+  // entrega já é o número da mesa lido no QR; o GPS só refina onde ele está.
+  return new Promise(function (resolve) {
+    if (!navigator.geolocation) { resolve(null); return; }
+    const ler = function (alta, t, idade, falha) {
+      navigator.geolocation.getCurrentPosition(
+        function (pos) { resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, prec: pos.coords.accuracy, ts: Date.now() }); },
+        falha,
+        { enableHighAccuracy: alta, timeout: t, maximumAge: idade }
+      );
+    };
+    ler(true, 12000, 0, function () { ler(false, 8000, 60000, function () { resolve(null); }); });
+  });
 }
 
 async function ccGravarSinalConfirmacaoMesa(numero, sinalTipo) {
@@ -12873,8 +13069,15 @@ async function ccGravarSinalConfirmacaoMesa(numero, sinalTipo) {
   const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
   if (!empresaId) return;
   const coords = await ccCapturarGeoConfirmacao();
-  if (!coords) return; // cliente negou/sem suporte -- não grava sinal incompleto, mesa e pedido seguem normalmente
-  await ccEscreverComResiliencia("mesas", {
+  if (!coords) {
+    // Sem GPS (cliente negou/sem sinal): ainda avisa o painel do tipo de sinal
+    // (o bloco da mesa pisca), só não há marcador de localização.
+    _ccMesasSinalTipo[Number(numero)] = sinalTipo;
+    await ccEscreverComResiliencia("mesas", { empresa_id: empresaId, numero: Number(numero), gps_cliente_capturado_em: new Date().toISOString(), sinal_tipo: sinalTipo }, "empresa_id,numero");
+    if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
+    return;
+  }
+  const _rSinal = await ccEscreverComResiliencia("mesas", {
     empresa_id: empresaId,
     numero: Number(numero),
     gps_cliente_lat: coords.lat,
@@ -12882,6 +13085,7 @@ async function ccGravarSinalConfirmacaoMesa(numero, sinalTipo) {
     gps_cliente_capturado_em: new Date().toISOString(),
     sinal_tipo: sinalTipo, // "pedido" ou "campainha"
   }, "empresa_id,numero");
+  if (_rSinal && _rSinal.erro) console.error("[Sinal GPS] gravação no Supabase FALHOU (rode o SQL de colunas gps_cliente_*):", _rSinal.erro);
   mesaGeoCliente[Number(numero)] = coords;
   _ccMesasSinalTipo[Number(numero)] = sinalTipo;
   if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
@@ -20169,6 +20373,31 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", iniciar);
   else iniciar();
+})();
+</script>
+<script>
+/* Permissão de localização já resolvida ANTES do pedido.
+   O navegador só pergunta se ainda não houver resposta gravada neste celular.
+   Por isso, ao abrir o cardápio pelo QR da mesa, se o estado for "prompt" a pergunta
+   nativa é disparada AGORA (uma única vez, resultado descartado — nada é enviado nem
+   rastreado). Se já estiver "granted", não pergunta nada. Na aprovação do pedido a
+   leitura acontece direto, sem pergunta e sem atrasar o pedido. */
+(function () {
+  function mesaDoCliente() {
+    try {
+      const m = new URLSearchParams(location.search).get("mesa") || localStorage.getItem(CC_MESA_CLIENTE_KEY);
+      return m && /^\d+$/.test(String(m)) && !carregar("turnoAtivo", null);
+    } catch (e) { return false; }
+  }
+  function aquecer() {
+    if (!mesaDoCliente() || !navigator.geolocation) return;
+    const perguntar = function () { navigator.geolocation.getCurrentPosition(function () {}, function () {}, { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 }); };
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "geolocation" }).then(function (r) { if (r.state === "prompt") perguntar(); }).catch(perguntar);
+    } else perguntar();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { setTimeout(aquecer, 600); });
+  else setTimeout(aquecer, 600);
 })();
 </script>
 </body></html>
