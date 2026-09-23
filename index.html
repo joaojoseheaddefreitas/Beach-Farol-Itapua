@@ -12835,20 +12835,37 @@ function ccAbrirLocalizacaoDelivery(id) {
 // da mesa com o sinal vivo do celular. Nunca bloqueia nem atrasa o
 // pedido/campainha: roda fire-and-forget e falha em silêncio se o
 // cliente negar o GPS ou o navegador não suportar.
+// RASTREAMENTO SILENCIOSO DE FUNDO: em vez de pedir uma leitura pontual de
+// GPS bem no instante do clique (o que, no 4G/5G instável da praia, pode
+// estourar o timeout antes do satélite responder e mandar a coordenada em
+// branco), mantemos um watchPosition rodando em segundo plano desde o
+// carregamento da página. A última posição válida fica cacheada em
+// _ccUltimaGeoConfirmacao; o clique em "Confirmar Pedido"/"Tocar Campainha"
+// só LÊ esse cache na hora -- nunca espera o GPS responder.
+let _ccUltimaGeoConfirmacao = null;
+let _ccWatchIdGeoConfirmacao = null;
+function ccIniciarRastreioSilenciosoGeoConfirmacao() {
+  if (!navigator.geolocation || _ccWatchIdGeoConfirmacao !== null) return;
+  _ccWatchIdGeoConfirmacao = navigator.geolocation.watchPosition(
+    function (pos) {
+      _ccUltimaGeoConfirmacao = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    },
+    function (err) {
+      console.warn("[Geo confirmação] watchPosition não conseguiu atualizar:", err.message);
+    },
+    { enableHighAccuracy: true, maximumAge: 0 }
+  );
+}
+document.addEventListener("DOMContentLoaded", function () {
+  setTimeout(ccIniciarRastreioSilenciosoGeoConfirmacao, 300);
+});
+
 function ccCapturarGeoConfirmacao() {
-  return new Promise(function (resolve) {
-    if (!navigator.geolocation) { resolve(null); return; }
-    navigator.geolocation.getCurrentPosition(
-      function (pos) {
-        resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-      },
-      function (err) {
-        console.warn("[Geo confirmação] não capturou posição:", err.message);
-        resolve(null);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
-  });
+  // Não faz mais uma leitura nova de GPS aqui -- isso é exatamente o que
+  // causava o sinal sumir em campo (timeout antes do satélite responder no
+  // 4G/5G instável). Apenas devolve a última posição válida que o
+  // watchPosition de fundo já tinha guardada em cache, na hora, sem lag.
+  return Promise.resolve(_ccUltimaGeoConfirmacao);
 }
 
 async function ccGravarSinalConfirmacaoMesa(numero, sinalTipo) {
