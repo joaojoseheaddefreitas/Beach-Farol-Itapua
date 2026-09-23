@@ -2461,6 +2461,7 @@ let config     = carregar("config", DEFAULT_CONFIG);
 let historico  = carregar("historico", []); // [{id,data,mesa,itens,total,pag}]
 let mesaStatus = carregar("mesaStatus", {}); // {1: "livre"|"ocupada"|"conta"}
 let mesaGeo    = {};                          // {1: {lat,lng}} -- posição da mesa/guarda-sol no mapa (não da pessoa), só em memória (vem do pull/realtime do Supabase)
+let mesaGeoCliente = {};                      // {1: {lat,lng}} -- SINAL VIVO do celular do cliente no instante da confirmação (pedido/campainha), separado da posição fixa da mesa acima. Só em memória, vem do pull/realtime do Supabase.
 let mesaGeoDia = carregar("mesaGeoDia", {});  // {1: "2026-09-21"} -- guarda se já capturamos a posição dessa mesa HOJE, pra não pedir geolocalização de novo a cada pedido
 
 const S = {
@@ -6040,7 +6041,7 @@ function syncHistoricoCozinha() {
   historico.forEach(ped => {
     if(!pedidosCozinha.find(p=>p.id===ped.id)) {
       pedidosCozinha.unshift({
-        id:ped.id, data:ped.data, mesa:ped.mesa,
+        id:ped.id, numero:ped.numero, nome:ped.nome||"", data:ped.data, mesa:ped.mesa,
         itens:ped.itens, total:ped.total, pag:ped.pag,
         obs:ped.obs||"", status:"pendente"
       });
@@ -6269,26 +6270,43 @@ function renderAtendente() {
       :"🟡 Aguardando cozinha";
 
     // MODO SMART LINK: mesa chamando o garçom pra passar o cartão —
-    // pisca em azul com o valor total em destaque, por cima do estado normal.
+    // pisca em âmbar/amarelo (sinal de campainha) com o valor total em
+    // destaque, por cima do estado normal.
     const chamandoGarcom = _ccMesasChamandoGarcom.has(num);
+    // Sinal de confirmação combinado: pedido novo ainda não puxado pela
+    // cozinha pisca em vermelho; qualquer sinal de campainha (FAB ou
+    // smart link) pisca em amarelo. Não substitui nada do estado normal
+    // da mesa -- é só um destaque visual em cima.
+    const sinalTipo = _ccMesasSinalTipo[num];
+    // O vermelho de "pedido" segue o status real da cozinha (pendente),
+    // que já se resolve sozinho quando a cozinha avança o pedido -- não
+    // depende do sinal de GPS, que é só um anexo pro atendente localizar
+    // o cliente. Assim nunca fica piscando vermelho "preso".
+    const pedidoPiscando = pedsMesa.some(p=>p.status==="pendente");
+    const campainhaPiscando = chamandoGarcom || sinalTipo==="campainha";
 
     const card = document.createElement("div");
     card.className="admin-card";
-    card.style.borderLeft=`4px solid ${chamandoGarcom ? "#2563eb" : borderCor}`;
+    card.style.borderLeft = `4px solid ${
+      chamandoGarcom ? "#f59e0b"
+      : campainhaPiscando ? "#f59e0b"
+      : pedidoPiscando ? "#dc2626"
+      : borderCor}`;
     card.style.position="relative";
     if(temPronto) card.style.boxShadow="0 0 0 3px rgba(34,197,94,.2)";
-    if(chamandoGarcom) card.style.animation = "pulse 1s infinite";
+    if(chamandoGarcom || campainhaPiscando || pedidoPiscando) card.style.animation = "pulse 1s infinite";
 
     card.innerHTML = chamandoGarcom ? `
       <div class="flex items-center justify-between mb-2">
         <span class="font-black text-base" style="color:#0f2340">Mesa ${String(num).padStart(2,"0")}</span>
-        <span class="badge" style="background:#dbeafe;color:#2563eb">💳 Chamando garçom</span>
+        <span class="badge" style="background:#fef3c7;color:#92400e">🔔 Chamando garçom</span>
       </div>
-      <p class="text-xs font-bold mb-2" style="color:#2563eb">Cliente quer pagar no cartão, direto na maquininha</p>
-      <p class="text-3xl font-black text-center my-3" style="color:#2563eb">${fmtBRL(_ccMesasChamandoGarcomTotal[num] || (ultimoPed?ultimoPed.total:0))}</p>
-      <button onclick="ccConfirmarPagamentoSmartLink(${num})" class="btn-primary w-full text-sm py-2" style="background:#2563eb">
+      <p class="text-xs font-bold mb-2" style="color:#92400e">Cliente quer pagar no cartão, direto na maquininha</p>
+      <p class="text-3xl font-black text-center my-3" style="color:#92400e">${fmtBRL(_ccMesasChamandoGarcomTotal[num] || (ultimoPed?ultimoPed.total:0))}</p>
+      <button onclick="ccConfirmarPagamentoSmartLink(${num})" class="btn-primary w-full text-sm py-2" style="background:#f59e0b">
         ✅ Já passei o cartão — Confirmar Pagamento
       </button>
+      ${mesaGeoCliente[num]?`<button onclick="ccAbrirSinalClienteMesa(${num})" class="btn-ghost w-full text-xs py-2 mt-2">📡 Ver sinal de GPS do cliente</button>`:""}
     ` : `
       <div class="flex items-center justify-between mb-2">
         <span class="font-black text-base" style="color:#0f2340">Mesa ${String(num).padStart(2,"0")}</span>
@@ -6298,6 +6316,7 @@ function renderAtendente() {
       </div>
       <p class="text-xs font-bold mb-2" style="color:${borderCor}">${statusPedLabel}</p>
       ${ultimoPed?`
+        ${ultimoPed.numero?`<p class="text-xs font-black mb-1" style="color:#0f2340">#${ultimoPed.numero}${ultimoPed.nome?" · "+ultimoPed.nome:""}</p>`:""}
         <div class="text-xs text-gray-500 mb-1 leading-relaxed">
           ${ultimoPed.itens.slice(0,3).map(i=>`${i.q}× ${i.nome}`).join(" · ")}${ultimoPed.itens.length>3?"…":""}
         </div>
@@ -6307,6 +6326,7 @@ function renderAtendente() {
         ${temPronto?`<button onclick="ccMarcarEntregueMesa(${num})" class="btn-primary text-xs py-2 px-3 flex-1" style="background:#16a34a">✓ Marcar como Entregue</button>`:""}
         ${isConta||temPronto?`<button onclick="abrirMaquininhaMesa(${num})" class="btn-primary text-xs py-2 px-3 flex-1">💳 Cobrar</button>`:""}
         ${mesaGeo[num]?`<button onclick="ccAbrirLocalizacaoMesa(${num})" class="btn-primary text-xs py-2 px-3" style="background:#0891b2">📍 Localizar</button>`:""}
+        ${mesaGeoCliente[num]?`<button onclick="ccAbrirSinalClienteMesa(${num})" class="btn-primary text-xs py-2 px-3" style="background:#f59e0b">📡 Sinal do Cliente</button>`:""}
         <button onclick="setMesaStatus(${num},'conta')" class="btn-ghost text-xs py-2 px-3" style="color:#dc2626;border-color:#dc2626">💳 Conta</button>
         <button onclick="setMesaStatus(${num},'livre')" class="btn-ghost text-xs py-2 px-3">🟢 Liberar</button>
         <button onclick="ccCorrigirSessaoMesa(${num})" class="btn-ghost text-xs py-2 px-3" title="Some pedidos de dias anteriores continuam somando na conta desta mesa? Clique aqui pra descartar só o que é antigo, mantendo os pedidos de hoje.">🔄 Corrigir Sessão</button>
@@ -6331,6 +6351,12 @@ enviarPedido = function() {
     syncHistoricoCozinha();
     salvar("pedidosCozinha_v1", pedidosCozinha);
   }, 150);
+  // Sinal de confirmação combinado: GPS vivo do celular no instante do
+  // clique em "Confirmar Pedido" (mesa/salão). Roda em paralelo, não
+  // atrasa nem bloqueia o envio do pedido.
+  if (typeof S !== "undefined" && S.mesa && typeof ccGravarSinalConfirmacaoMesa === "function") {
+    ccGravarSinalConfirmacaoMesa(S.mesa, "pedido");
+  }
 };
 
 // ─── AUTO-REFRESH 10s ───────────────────────────────────────────
@@ -8475,11 +8501,17 @@ function _calcDlTotal() {
 //  SEÇÃO 4: CONFIRMAR / SALVAR PEDIDO DELIVERY
 // ══════════════════════════════════════════════════════════════════
 
-function confirmarDelivery(editId) {
+async function confirmarDelivery(editId) {
   const end    = (document.getElementById("dl-end") || {}).value?.trim();
   const itens  = Object.entries(_dlCart).filter(([,q]) => q > 0);
   if(!end)    { toast("⚠️ Endereço obrigatório"); return; }
   if(!itens.length) { toast("⚠️ Adicione ao menos um item"); return; }
+
+  // Captura a coordenada exata do endereço do cliente no momento do
+  // clique em "Confirmar Pedido" (só roda em link de delivery limpo,
+  // ver ccCapturarGeoDelivery). Nunca bloqueia o pedido se o
+  // navegador negar ou não suportar geolocalização.
+  const geoDelivery = await ccCapturarGeoDelivery();
 
   const pagAtivo = document.querySelector("#dl-pag-opts .popt.on");
   const pag = pagAtivo ? pagAtivo.dataset.pay : "pix";
@@ -8520,6 +8552,8 @@ function confirmarDelivery(editId) {
     modo_preco:  (typeof config !== "undefined") ? (config.modo_preco || "praia") : "praia",
     status:      editId ? (pedidosDelivery.find(p => p.id === editId)?.status || "recebido") : "recebido",
     itens:       itensDetalhe,
+    latitude:    geoDelivery ? geoDelivery.lat : (editId ? (pedidosDelivery.find(p => p.id === editId)?.latitude ?? null) : null),
+    longitude:   geoDelivery ? geoDelivery.lng : (editId ? (pedidosDelivery.find(p => p.id === editId)?.longitude ?? null) : null),
   };
 
   if(editId) {
@@ -8665,6 +8699,11 @@ function renderDelivery() {
           <button onclick="_abrirPixDelivery('${ped.id}')"
             style="border:none;border-radius:8px;background:#25d366;color:#fff;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer">
             💸 Pix
+          </button>` : ""}
+        ${ped.latitude && ped.longitude ? `
+          <button onclick="ccAbrirLocalizacaoDelivery('${ped.id}')"
+            style="border:none;border-radius:8px;background:#0891b2;color:#fff;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer">
+            🗺️ Rota
           </button>` : ""}
         <button onclick="_whatsDelivery('${ped.id}')"
           style="border:none;border-radius:8px;background:#25d366;color:#fff;padding:7px 10px;font-size:.72rem;font-weight:700;cursor:pointer">
@@ -12743,6 +12782,103 @@ function ccCapturarGeoMesa(numero) {
   );
 }
 
+// ─── GEOLOCALIZAÇÃO DO DELIVERY DE RUA (endereço do cliente) ────
+// Módulo isolado — NÃO reaproveita nem altera ccCapturarGeoMesa/
+// ccGravarGeoMesa (a mesa da praia continua com sua captura fixa,
+// uma vez por dia, intocada). Só entra em ação quando o link foi
+// acessado limpo, sem o parâmetro de mesa (nem ?mesa= na URL, nem
+// wl_mesa_atual_cliente salvo no localStorage) — ou seja, não é
+// cliente de mesa/guarda-sol, é pedido de rua (o endereço muda a
+// cada pedido, então a captura acontece a cada pedido também).
+function ccLinkDeliveryLimpo() {
+  const semMesaNaUrl = !new URLSearchParams(window.location.search).get("mesa");
+  const semMesaSalva = !localStorage.getItem(CC_MESA_CLIENTE_KEY);
+  return semMesaNaUrl && semMesaSalva;
+}
+
+function ccCapturarGeoDelivery() {
+  return new Promise(function (resolve) {
+    if (!ccLinkDeliveryLimpo()) { resolve(null); return; }
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      function (err) {
+        console.warn("[Geo delivery] não capturou posição:", err.message);
+        resolve(null);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
+// Abre o Google Maps com a coordenada exata capturada no momento do
+// pedido -- guia o motoboy até a casa do cliente pelas ruas de Salvador.
+function ccAbrirLocalizacaoDelivery(id) {
+  const ped = pedidosDelivery.find(function (p) { return p.id === id; });
+  if (!ped || !ped.latitude || !ped.longitude) {
+    if (typeof toast === "function") toast("Ainda não temos a localização de GPS deste pedido.");
+    return;
+  }
+  window.open(`https://www.google.com/maps/dir/?api=1&destination=${ped.latitude},${ped.longitude}`, "_blank");
+}
+
+// ─── SINAL DE CONFIRMAÇÃO COMBINADO (Mesa fixa + GPS vivo do celular) ──
+// Módulo isolado — NÃO altera ccCapturarGeoMesa()/ccGravarGeoMesa() (a
+// posição fixa do guarda-sol/mesa continua exatamente como está, uma
+// vez por dia). Este roda EM PARALELO: captura o GPS ao vivo do celular
+// do cliente no instante exato em que ele confirma o pedido ou toca a
+// campainha, e grava como sinal extra na MESMA linha da mesa no
+// Supabase (colunas novas, upsert por empresa_id+numero -- a mesma
+// chave que ccGravarGeoMesa já usa) pro atendente cruzar a posição fixa
+// da mesa com o sinal vivo do celular. Nunca bloqueia nem atrasa o
+// pedido/campainha: roda fire-and-forget e falha em silêncio se o
+// cliente negar o GPS ou o navegador não suportar.
+function ccCapturarGeoConfirmacao() {
+  return new Promise(function (resolve) {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      function (err) {
+        console.warn("[Geo confirmação] não capturou posição:", err.message);
+        resolve(null);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
+async function ccGravarSinalConfirmacaoMesa(numero, sinalTipo) {
+  if (!numero || !/^\d+$/.test(String(numero))) return; // só mesa numerada (praia/salão) -- Balcão/Delivery têm seu próprio fluxo
+  const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+  if (!empresaId) return;
+  const coords = await ccCapturarGeoConfirmacao();
+  if (!coords) return; // cliente negou/sem suporte -- não grava sinal incompleto, mesa e pedido seguem normalmente
+  await ccEscreverComResiliencia("mesas", {
+    empresa_id: empresaId,
+    numero: Number(numero),
+    gps_cliente_lat: coords.lat,
+    gps_cliente_lng: coords.lng,
+    gps_cliente_capturado_em: new Date().toISOString(),
+    sinal_tipo: sinalTipo, // "pedido" ou "campainha"
+  }, "empresa_id,numero");
+  mesaGeoCliente[Number(numero)] = coords;
+  _ccMesasSinalTipo[Number(numero)] = sinalTipo;
+  if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
+}
+
+// Abre o Google Maps com o SINAL VIVO do celular do cliente (não a
+// posição fixa da mesa) -- útil quando o atendente precisa localizar o
+// cliente exato na areia, ou o endereço de quem pediu de casa.
+function ccAbrirSinalClienteMesa(num) {
+  const g = mesaGeoCliente[num];
+  if (!g) { if (typeof toast === "function") toast("Ainda não recebemos o sinal de GPS do celular do cliente."); return; }
+  window.open(`https://www.google.com/maps/dir/?api=1&destination=${g.lat},${g.lng}`, "_blank");
+}
+
 // ─── FONTE ÚNICA DE VERDADE — toda mudança de status de mesa passa por
 // aqui: atualiza local (pra tela responder na hora) E o Supabase (pra
 // sincronizar com outros dispositivos). Substitui os 7 pontos que antes
@@ -12763,6 +12899,15 @@ function ccSetMesaStatus(numero, status, total) {
     delete mesaGeoDia[numero];
     salvar("mesaGeoDia", mesaGeoDia);
     ccGravarGeoMesa(numero, null, null); // limpa no servidor -- amanhã a mesa pode estar em outro lugar
+    // Limpa também o sinal vivo do celular (pedido/campainha) -- mesa
+    // liberada não deve continuar piscando com o sinal do cliente anterior.
+    delete mesaGeoCliente[numero];
+    delete _ccMesasSinalTipo[numero];
+    if (typeof ccEscreverComResiliencia === "function") {
+      ccEscreverComResiliencia("mesas",
+        { empresa_id: empresaId, numero: Number(numero), gps_cliente_lat: null, gps_cliente_lng: null, sinal_tipo: null },
+        "empresa_id,numero");
+    }
   } else if (mesaGeoDia[numero] !== hoje) {
     mesaGeoDia[numero] = hoje;
     salvar("mesaGeoDia", mesaGeoDia);
@@ -12797,7 +12942,14 @@ async function ccIniciarEscutaMesasRealtime() {
   // um garçom abrindo o tablet depois que a mesa já ficou ocupada no
   // celular do cliente nunca ficaria sabendo.
   try {
-    const { data, error } = await sb.from("mesas").select("numero,status,latitude,longitude").eq("empresa_id", empresaId);
+    // Tenta puxar já com as colunas do sinal vivo do celular (novas); se o
+    // banco ainda não tiver essas colunas (migração não rodada ainda),
+    // cai pro select antigo -- nunca deixa o pull de status/posição da
+    // mesa (que já funcionava) parar de funcionar por causa disso.
+    let { data, error } = await sb.from("mesas").select("numero,status,latitude,longitude,gps_cliente_lat,gps_cliente_lng,sinal_tipo").eq("empresa_id", empresaId);
+    if (error) {
+      ({ data, error } = await sb.from("mesas").select("numero,status,latitude,longitude").eq("empresa_id", empresaId));
+    }
     if (!error && Array.isArray(data)) {
       data.forEach(linha => {
         const statusLocal = linha.status === "pronto_entrega" ? "conta"
@@ -12806,6 +12958,10 @@ async function ccIniciarEscutaMesasRealtime() {
         if (statusLocal) mesaStatus[linha.numero] = statusLocal;
         mesaGeo[linha.numero] = (linha.latitude != null && linha.longitude != null)
           ? { lat: linha.latitude, lng: linha.longitude } : null;
+        mesaGeoCliente[linha.numero] = (linha.gps_cliente_lat != null && linha.gps_cliente_lng != null)
+          ? { lat: linha.gps_cliente_lat, lng: linha.gps_cliente_lng } : null;
+        if (linha.sinal_tipo) _ccMesasSinalTipo[linha.numero] = linha.sinal_tipo;
+        else delete _ccMesasSinalTipo[linha.numero];
       });
       salvar("mesaStatus", mesaStatus);
       if (typeof S !== "undefined" && S.viewAtual === "atendente" && typeof renderAtendente === "function") renderAtendente();
@@ -12844,6 +13000,15 @@ async function ccIniciarEscutaMesasRealtime() {
         } else if ("latitude" in linha) {
           delete mesaGeo[linha.numero];
         }
+        // Sinal vivo do celular do cliente (pedido/campainha) -- coluna
+        // nova e independente da posição fixa da mesa acima.
+        if (linha.gps_cliente_lat != null && linha.gps_cliente_lng != null) {
+          mesaGeoCliente[linha.numero] = { lat: linha.gps_cliente_lat, lng: linha.gps_cliente_lng };
+        } else if ("gps_cliente_lat" in linha) {
+          delete mesaGeoCliente[linha.numero];
+        }
+        if (linha.sinal_tipo) _ccMesasSinalTipo[linha.numero] = linha.sinal_tipo;
+        else if ("sinal_tipo" in linha) delete _ccMesasSinalTipo[linha.numero];
         if (typeof renderAtendente === "function" && S.viewAtual === "atendente") renderAtendente();
         if (typeof renderMesaGrid === "function" && S.viewAtual === "mesas") renderMesaGrid();
       }
@@ -12854,6 +13019,7 @@ async function ccIniciarEscutaMesasRealtime() {
 // ─── MODO SMART LINK: cliente chama o garçom pra passar o cartão ───────
 const _ccMesasChamandoGarcom = new Set();
 const _ccMesasChamandoGarcomTotal = {};
+const _ccMesasSinalTipo = {};                 // {1: "pedido"|"campainha"} -- último sinal vivo recebido, pra piscar vermelho/amarelo no painel do atendente
 
 // ─── CAMPAINHA VERMELHA (chamar atendente) → fila_balcao ────────────────
 // Insert real e separado da chamada Smart Link acima (que grava em
@@ -12893,6 +13059,12 @@ async function ccChamarGarcomCartao() {
 
   await ccAtualizarMesaSupabase(empresaId, Number(mesa), "chamando_garcom", total);
   toast("📟 Garçom chamado! Ele já está vendo o valor na maquininha.");
+
+  // Sinal de confirmação combinado: GPS vivo do celular no instante do
+  // toque na campainha. Roda em paralelo, não atrasa a chamada.
+  if (typeof ccGravarSinalConfirmacaoMesa === "function") {
+    ccGravarSinalConfirmacaoMesa(mesa, "campainha");
+  }
 }
 
 // Chamado pelo garçom, na tela dele, quando termina de passar o cartão
