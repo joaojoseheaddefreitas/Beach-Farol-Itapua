@@ -6037,16 +6037,40 @@ function confirmarPgto(metodo) {
 }
 
 // ─── SINCRONIZAR HISTÓRICO → COZINHA ────────────────────────────
+// Data → milissegundos. Timestamp do Supabase sem fuso ("2026-09-23 19:29:00")
+// é UTC: sem isso o navegador lê como horário local e erra em 3 h.
+function _ccParseData(v) {
+  if (!v) return NaN;
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) v = v.replace(" ", "T") + "Z";
+  return new Date(v).getTime();
+}
+// Livro-razão da cozinha: ids que JÁ passaram pela fila. Pedido limpo/entregue
+// some para sempre — o histórico de vendas não o ressuscita.
+let cozVistos = carregar("cozVistos_v1", {});
 function syncHistoricoCozinha() {
-  historico.forEach(ped => {
-    if(!pedidosCozinha.find(p=>p.id===ped.id)) {
-      pedidosCozinha.unshift({
-        id:ped.id, numero:ped.numero, nome:ped.nome||"", data:ped.data, mesa:ped.mesa,
-        itens:ped.itens, total:ped.total, pag:ped.pag,
-        obs:ped.obs||"", status:"pendente"
-      });
-    }
+  const LIMITE_MS = (Number(config.horasEncerramentoPedido) || 12) * 3600 * 1000; // pedido mais velho que isso nunca fica na fila
+  let mudou = false;
+  // Pedidos de outros dias que ficaram abertos são encerrados sozinhos (some da cozinha, do mapa e do acompanhamento).
+  pedidosCozinha.forEach(p => {
+    if (p.status === "entregue") return;
+    const t = _ccParseData(p.data);
+    if (Number.isFinite(t) && Date.now() - t > LIMITE_MS) { p.status = "entregue"; p.encerradoAuto = true; }
   });
+  pedidosCozinha.forEach(p => { if (!cozVistos[p.id]) { cozVistos[p.id] = 1; mudou = true; } });
+  historico.forEach(ped => {
+    if (cozVistos[ped.id] || pedidosCozinha.find(p => p.id === ped.id)) return;
+    cozVistos[ped.id] = 1; mudou = true; // decidido agora: entra uma vez só, ou é ignorado
+    const t = _ccParseData(ped.data);
+    if (Number.isFinite(t) && Date.now() - t > LIMITE_MS) return;
+    pedidosCozinha.unshift({
+      id:ped.id, numero:ped.numero, nome:ped.nome||"", data:ped.data, mesa:ped.mesa,
+      itens:ped.itens, total:ped.total, pag:ped.pag,
+      obs:ped.obs||"", status:"pendente"
+    });
+  });
+  const ks = Object.keys(cozVistos);
+  if (ks.length > 3000) { ks.slice(0, ks.length - 3000).forEach(k => delete cozVistos[k]); mudou = true; }
+  if (mudou) { try { localStorage.setItem("solbahia_cozVistos_v1", JSON.stringify(cozVistos)); } catch (e) {} }
   salvar("pedidosCozinha_v1", pedidosCozinha);
 }
 
@@ -6071,7 +6095,6 @@ const cozStatusCfg = {
 // ─── COZINHA: RENDER ─────────────────────────────────────────────
 function renderCozinha() {
   if(!document.getElementById("kds-cards-wrap")) return;
-  syncHistoricoCozinha();
 
   const agora = new Date();
   const reloj = document.getElementById("kds-reloj");
@@ -6125,10 +6148,21 @@ function renderCozinha() {
 
   lista.forEach(ped => {
     const cfg = cozStatusCfg[ped.status]||cozStatusCfg.pendente;
-    const minRaw = ped.data ? Math.floor((Date.now()-new Date(ped.data).getTime())/60000) : 0;
-    const min = (Number.isFinite(minRaw) && minRaw >= 0 && minRaw < 100000) ? minRaw : 0;
-    const tempoLabel = min<1?"agora":`${min} min atrás`;
-    const urgente = ped.status!=="entregue" && min>=20;
+    const _t0 = _ccParseData(ped.data);
+    const minRaw = Number.isFinite(_t0) ? Math.floor((Date.now()-_t0)/60000) : 0;
+    const min = (Number.isFinite(minRaw) && minRaw >= 0) ? minRaw : 0;
+    const _hhmm = t => new Date(t).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
+    const _encerrado = ped.status==="entregue" || min > 720; // entregue ou > 12 h: cronômetro trava
+    let tempoLabel;
+    if (ped.status==="entregue") {
+      const _te = _ccParseData(ped.entregueEm);
+      tempoLabel = Number.isFinite(_te) ? `Entregue às ${_hhmm(_te)}` : "Entregue";
+    } else if (_encerrado) {
+      tempoLabel = `Encerrado · pedido de ${new Date(_t0).toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"})} às ${_hhmm(_t0)}`;
+    } else {
+      tempoLabel = min<1 ? "agora" : `${min} min atrás`;
+    }
+    const urgente = !_encerrado && min>=20;
 
     const card = document.createElement("div");
     const stCls = ped.status==="pendente"?"st-pendente":ped.status==="preparo"?"st-preparo":"st-pronto";
@@ -6317,6 +6351,13 @@ function _ccInjetarEstiloMapaMesas() {
   document.head.appendChild(st);
 }
 
+// Posições das mesas ficam DENTRO do config (já sincronizado com os outros aparelhos):
+// arrastou num tablet → aparece no do garçom, sem tabela nova no banco.
+function _ccSalvarPosicoesMapa() {
+  salvar("mapaGeoOverride", mapaGeoOverride);
+  config.mapaGeoOverride = mapaGeoOverride;
+  salvar("config", config);
+}
 const _ccGrupoMesa = p => [Number(p)]; // mesas juntadas usam UM número/QR só; vários clientes no mesmo QR dividem a conta no fechamento
 const _ccPosMesa = n => mapaGeoOverride[n] || mesaGeo[n] || null;
 
@@ -6367,6 +6408,7 @@ function _ccMapaBip() {
 }
 
 function _ccMontarMapaMesasHTML() {
+  if (config.mapaGeoOverride && typeof config.mapaGeoOverride === "object") mapaGeoOverride = config.mapaGeoOverride; // vem do config sincronizado
   const pad = n => String(n).padStart(2, "0");
   const maxN = Math.max(config.numMesas || 20, ...Object.keys(mesaStatus).map(Number).filter(n => !isNaN(n)), 1);
   const grupos = [];
@@ -6483,7 +6525,7 @@ function ccMapaPD(ev, n) {
     _ccMapaArrastando = false;
     if (moved && _ccMapaFrameAtual) {
       mapaGeoOverride[n] = _ccMapaFrameAtual.inv(fx, fy);
-      salvar("mapaGeoOverride", mapaGeoOverride);
+      _ccSalvarPosicoesMapa();
     } else { _ccMapaSel = (_ccMapaSel === n ? null : n); }
     renderAtendente();
   };
@@ -6493,14 +6535,14 @@ function ccMapaSelecionar(n) { _ccMapaSel = n; renderAtendente(); }
 function ccMapaToggle(w) { if (w === "mover") _ccMapaMover = !_ccMapaMover; else _ccMapaTodas = !_ccMapaTodas; renderAtendente(); }
 function ccMapaResetTudo() {
   if (!confirm("Voltar todas as mesas para a posição capturada pelo GPS (desfaz as posições arrastadas)?")) return;
-  mapaGeoOverride = {}; salvar("mapaGeoOverride", mapaGeoOverride); renderAtendente();
+  mapaGeoOverride = {}; _ccSalvarPosicoesMapa(); renderAtendente();
 }
-function ccMapaLimparPos(n) { delete mapaGeoOverride[n]; salvar("mapaGeoOverride", mapaGeoOverride); renderAtendente(); }
+function ccMapaLimparPos(n) { delete mapaGeoOverride[n]; _ccSalvarPosicoesMapa(); renderAtendente(); }
 function ccMapaPuxarParaCliente(p) {
   const e = _ccEstadoGrupo(p), c = e.sinalN && mesaGeoCliente[e.sinalN];
   if (!c) return;
   mapaGeoOverride[p] = { lat: c.lat, lng: c.lng };
-  salvar("mapaGeoOverride", mapaGeoOverride);
+  _ccSalvarPosicoesMapa();
   if (typeof toast === "function") toast("Mesa " + p + " reposicionada onde o cliente está.");
   renderAtendente();
 }
@@ -6521,7 +6563,7 @@ function ccMapaAcao(tipo, p) {
   const g = _ccGrupoMesa(p);
   if (tipo === "entregue") g.forEach(n => ccMarcarEntregueMesa(n));
   else g.forEach(n => setMesaStatus(n, tipo));
-  if (tipo === "livre") { g.forEach(n => { delete mapaGeoOverride[n]; }); salvar("mapaGeoOverride", mapaGeoOverride); ccMapaSeparar(p); _ccMapaSel = null; }
+  if (tipo === "livre") { g.forEach(n => { delete mapaGeoOverride[n]; }); _ccSalvarPosicoesMapa(); ccMapaSeparar(p); _ccMapaSel = null; }
 }
 
 // Abre o Google Maps com a coordenada da mesa (capturada uma vez, na
@@ -14299,30 +14341,56 @@ function ccRenderPedidosCliente() {
     return;
   }
   let html = `<p class="text-xs text-gray-400 text-center mb-3">Mesa/Nome: <strong class="text-gray-600">${S.mesa}</strong></p>`;
+  if (!document.getElementById("cc-track-estilo")) {
+    const st = document.createElement("style"); st.id = "cc-track-estilo";
+    st.textContent = `.cc-timer-fix{font-weight:900;font-size:.95rem;color:#0f2340}
+    .cc-prog{height:6px;border-radius:6px;background:#e2e8f0;overflow:hidden;margin:8px 0 6px}.cc-prog i{display:block;height:100%;width:0;background:#22c55e;transition:width .8s}
+    .cc-prog.atrasado i{background:#f59e0b}
+    .cc-steps{display:flex;justify-content:space-between;gap:4px;margin:2px 0 4px}
+    .cc-steps span{flex:1;text-align:center;font-size:.6rem;font-weight:800;color:#94a3b8;border-top:3px solid #e2e8f0;padding-top:3px}
+    .cc-steps span.ok{color:#16a34a;border-color:#16a34a}.cc-steps span.now{color:#c2410c;border-color:#f97316}
+    .cc-atraso{font-size:.68rem;font-weight:700;color:#b45309;margin-top:2px}
+    .cc-timer.cc-atrasado{color:#b45309}`;
+    document.head.appendChild(st);
+  }
+  const _hhmm = t => new Date(t).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const _passos = ["pendente", "preparo", "pronto", "entregue"], _nomesP = ["Recebido", "Em preparo", "Pronto", "Entregue"];
   html += linhas.map(l => {
     const nomes = l.itens.map(i => `${i.q}× ${i.nome}`).join(", ");
-    const badgeClass = l.statusFinal ? "cc-badge-entregue" : (l.aguardando ? "cc-badge-aguardando" : ("cc-badge-" + (l.status || "pendente")));
-    let timerHtml, previsaoHtml = "", statusMsg = "";
+    const t0 = _ccParseData(l.data);
+    const idadeMin = Number.isFinite(t0) ? Math.floor((Date.now() - t0) / 60000) : 0;
+    const expirado = !l.statusFinal && !l.aguardando && idadeMin > 720; // pedido de mais de 12 h: encerrado
+    const badgeClass = (l.statusFinal || expirado) ? "cc-badge-entregue" : (l.aguardando ? "cc-badge-aguardando" : ("cc-badge-" + (l.status || "pendente")));
+    let label = l.label, topo = "", corpo = "";
     if (l.statusFinal) {
-      const fim = l.entregueEm ? new Date(l.entregueEm).getTime() : new Date(l.data).getTime();
-      const diffMs = Math.max(0, fim - new Date(l.data).getTime());
-      const m = Math.floor(diffMs / 60000), s = Math.floor((diffMs % 60000) / 1000);
-      timerHtml = `<span class="cc-timer cc-timer-lg">⏱ ${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}</span>`;
-      statusMsg = `<p class="cc-tl-previsao">✅ Pedido entregue com sucesso em ${m} minuto${m === 1 ? "" : "s"}</p>`;
+      const fim = _ccParseData(l.entregueEm);
+      const dur = Number.isFinite(fim) && Number.isFinite(t0) ? Math.max(0, Math.round((fim - t0) / 60000)) : null;
+      topo = `<span class="cc-timer-fix">✅ ${Number.isFinite(fim) ? "Entregue às " + _hhmm(fim) : "Entregue"}</span>`;
+      corpo = `<p class="cc-tl-previsao">${dur != null && dur <= 720 ? "Tempo total: " + dur + " min" : "Pedido concluído"}</p>`;
+    } else if (expirado) {
+      label = "⏹ Encerrado";
+      topo = `<span class="cc-timer-fix">Pedido de ${new Date(t0).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${_hhmm(t0)}</span>`;
+      corpo = `<p class="cc-tl-previsao">Este pedido é de outro horário e foi encerrado. Se algo ficou pendente, fale com o garçom.</p>`;
+    } else if (l.aguardando) {
+      topo = `<span class="cc-timer-fix">⏳ pagamento</span>`;
+      corpo = `<p class="cc-tl-previsao">Assim que o pagamento for aprovado, seu pedido segue para a cozinha.</p>`;
     } else {
-      timerHtml = `<span class="cc-timer cc-timer-lg" data-inicio="${l.data}" data-parado="0">⏱ 00:00</span>`;
-      previsaoHtml = `<p class="cc-tl-previsao">🕐 Previsão de entrega: até ${l.previsao} min</p>`;
+      const idx = Math.max(0, _passos.indexOf(l.status || "pendente"));
+      topo = `<span class="cc-timer cc-timer-lg" data-inicio="${l.data}" data-previsao="${l.previsao}" data-parado="0">⏱ 00:00</span>`;
+      corpo = `<p class="cc-tl-previsao">🕐 Previsão de entrega: até ${l.previsao} min</p>
+        <div class="cc-prog"><i></i></div>
+        <div class="cc-steps">${_passos.map((p, i) => `<span class="${i < idx ? "ok" : i === idx ? "now" : ""}">${_nomesP[i]}</span>`).join("")}</div>
+        <p class="cc-atraso" style="display:none">⏳ Está levando um pouco mais que o previsto — a cozinha já foi avisada.</p>`;
     }
-    const hora = new Date(l.data).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-    return `<div class="cc-timeline-card cc-timeline-card-v2 ${l.statusFinal ? "entregue" : ""} ${badgeClass}">
+    const hora = _hhmm(t0);
+    return `<div class="cc-timeline-card cc-timeline-card-v2 ${(l.statusFinal || expirado) ? "entregue" : ""} ${badgeClass}">
       <div class="cc-tl-top">
-        <span class="cc-badge cc-badge-lg ${badgeClass}">${l.label}</span>
-        ${timerHtml}
+        <span class="cc-badge cc-badge-lg ${badgeClass}">${label}</span>
+        ${topo}
       </div>
-      ${previsaoHtml}
+      ${corpo}
       <p class="cc-tl-itens">${nomes}</p>
       <p class="cc-tl-meta">${fmtBRL(l.total || 0)} · Feito às ${hora}</p>
-      ${statusMsg}
     </div>`;
   }).join("");
   wrap.innerHTML = html;
@@ -14330,11 +14398,25 @@ function ccRenderPedidosCliente() {
 }
 
 function ccAtualizarTimers() {
+  const LIM = 12 * 3600 * 1000, p2 = n => String(n).padStart(2, "0");
   document.querySelectorAll('.cc-timer[data-parado="0"]').forEach(el => {
-    const inicio = new Date(el.dataset.inicio).getTime();
-    const diffMs = Math.max(0, Date.now() - inicio);
-    const m = Math.floor(diffMs / 60000), s = Math.floor((diffMs % 60000) / 1000);
-    el.textContent = "⏱ " + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    const t0 = _ccParseData(el.dataset.inicio);
+    if (!Number.isFinite(t0)) return;
+    const d = Math.max(0, Date.now() - t0);
+    if (d > LIM) { el.dataset.parado = "1"; el.textContent = "⏱ encerrado"; return; } // nunca gira eternamente
+    const h = Math.floor(d / 3600000), m = Math.floor((d % 3600000) / 60000), sg = Math.floor((d % 60000) / 1000);
+    el.textContent = "⏱ " + (h ? h + ":" + p2(m) : p2(m)) + ":" + p2(sg);
+    const prev = Number(el.dataset.previsao);
+    if (prev > 0) {
+      const atrasado = d > prev * 60000, card = el.closest(".cc-timeline-card");
+      el.classList.toggle("cc-atrasado", atrasado);
+      if (card) {
+        const bar = card.querySelector(".cc-prog"), fill = bar && bar.firstElementChild, msg = card.querySelector(".cc-atraso");
+        if (fill) fill.style.width = Math.min(100, d / (prev * 60000) * 100) + "%";
+        if (bar) bar.classList.toggle("atrasado", atrasado);
+        if (msg) msg.style.display = atrasado ? "block" : "none";
+      }
+    }
   });
 }
 
@@ -14358,8 +14440,13 @@ async function ccPedidosClientePoll() {
         .from("pedidos_cozinha").select("dados")
         .eq("chave", "pedidosCozinha_v1").maybeSingle();
       if (!error && data && Array.isArray(data.dados)) {
-        pedidosCozinha.length = 0;
-        data.dados.forEach(p => pedidosCozinha.push(p));
+        const _rk = { pendente: 0, preparo: 1, pronto: 2, entregue: 3 }, _loc = new Map(pedidosCozinha.map(p => [p.id, p]));
+        data.dados.forEach(r => {
+          const l = _loc.get(r.id);
+          if (!l) { pedidosCozinha.push(r); return; }
+          if ((_rk[r.status] || 0) > (_rk[l.status] || 0)) l.status = r.status; // só avança; cópia atrasada não desfaz
+          if (r.entregueEm && !l.entregueEm) l.entregueEm = r.entregueEm;
+        });
         try { localStorage.setItem("solbahia_pedidosCozinha_v1", JSON.stringify(pedidosCozinha)); } catch (e) {}
         if (typeof ccRenderPedidosCliente === "function") ccRenderPedidosCliente();
       }
