@@ -223,7 +223,7 @@ window.COOKCONTROL_CONFIG = {
 
     window.salvar = function(key, val) {
       _salvarOrig(key, val);      // localStorage primeiro (síncrono)
-      _push(key, val);            // Supabase depois (assíncrono, não bloqueia)
+      _push(key, key === "categorias" && window._slimCategorias ? window._slimCategorias(val, false) : val);            // Supabase depois (assíncrono, não bloqueia)
     };
 
     console.log("[Sync] salvar() interceptada — sincronização ativa");
@@ -2403,11 +2403,34 @@ const DEFAULT_CONFIG = {
 /* ═══════════════════════════════════════
    PERSISTENT STORAGE (localStorage)
 ═══════════════════════════════════════ */
+/* Fotos padrão já vivem no código (DEFAULT_CATEGORIAS): não duplicar no localStorage/Supabase */
+function _slimCategorias(val, tudo) {
+  if (!Array.isArray(val)) return val;
+  var defImg = {};
+  try { DEFAULT_CATEGORIAS.forEach(function(c){ (c.itens||[]).forEach(function(i){ defImg[i.id] = i.img; }); }); } catch(e) {}
+  return val.map(function(cat){
+    return Object.assign({}, cat, { itens: (cat.itens||[]).map(function(it){
+      var img = it && it.img;
+      if (typeof img === "string" && img.indexOf("data:") === 0 && (tudo || defImg[it.id] === img)) {
+        return Object.assign({}, it, { img: "" });
+      }
+      return it;
+    })});
+  });
+}
+window._slimCategorias = _slimCategorias;
 function salvar(key, val) {
   // 100% offline: grava direto no LocalStorage. Retorna false se o navegador recusar (cota cheia).
   var ok = true;
   try {
-    localStorage.setItem("solbahia_" + key, JSON.stringify(val));
+    var v = (key === "categorias") ? _slimCategorias(val, false) : val;
+    try {
+      localStorage.setItem("solbahia_" + key, JSON.stringify(v));
+    } catch(e1) {
+      if (key !== "categorias") throw e1;
+      // cota ainda cheia: guarda tudo (preços, nomes, ativo) sem nenhuma foto embutida
+      localStorage.setItem("solbahia_" + key, JSON.stringify(_slimCategorias(val, true)));
+    }
   } catch(e) {
     ok = false;
     console.warn("[LocalStorage] falha ao salvar", key, e);
@@ -12541,7 +12564,7 @@ window._gestorRefresh = setInterval(() => {
 </script>
 <!-- PWA — Registro do Service Worker -->
 <script>
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   window.addEventListener('load', function() {
     navigator.serviceWorker.register('/service-worker.js').then(function(reg) {
       console.log('[PWA] Service Worker registrado:', reg.scope);
@@ -20015,7 +20038,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #cc-cat-nav-wrap #cc-ads-banner{
 
   /* ── cliente: busca avisos.json (só se este aparelho nunca configurou avisos) ── */
   function buscarRemoto(){
-    if(typeof fetch!=="function"){ aguardando=false; aplicar(false); return; }
+    if(typeof fetch!=="function" || !/^https?:$/.test(location.protocol)){ aguardando=false; aplicar(false); return; }
     var ctl=(typeof AbortController!=="undefined") ? new AbortController() : null;
     var to=setTimeout(function(){ if(ctl) try{ ctl.abort(); }catch(e){} },5000);
     fetch("avisos.json?t="+Date.now(), { cache:"no-store", signal: ctl ? ctl.signal : undefined })
