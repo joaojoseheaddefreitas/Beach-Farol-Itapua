@@ -13269,7 +13269,14 @@ async function ccAbrirRadarMesa(numero) {
       (Admin → 📍 Calibrar Posição das Mesas).</p>`;
     return;
   }
+  // Macroambiente deriva da MESMA regra que já trava pré-pago na praia
+  // (ccMesaEhPraia, mesas 50–100) -- não é um campo novo, é a fonte da
+  // verdade que o projeto já usa pra essa mesma divisão física.
+  const ehPraia = (typeof ccMesaEhPraia === "function") && ccMesaEhPraia(numero);
+  const faixaCor = ehPraia ? "#ea9a3c" : "#0891b2";
+  const faixaTxt = ehPraia ? "🏖️ ÁREA EXTERNA — PRAIA" : "🏠 ÁREA INTERNA — SALÃO";
   corpo.innerHTML = `
+    <div style="border-radius:10px;background:${faixaCor};color:#fff;font-weight:800;font-size:.72rem;letter-spacing:.04em;text-align:center;padding:6px;margin:8px 0 4px">${faixaTxt}</div>
     <div style="text-align:center;padding:10px 0">
       <p style="font-size:.8rem;color:#6b7280;margin-bottom:4px">Mesa</p>
       <p style="font-size:1.6rem;font-weight:900;color:#0f2340;margin-bottom:14px">${numero}${alvo.setor ? " · " + alvo.setor : ""}</p>
@@ -13281,11 +13288,13 @@ async function ccAbrirRadarMesa(numero) {
 
   // iOS exige permissão explícita pro sensor de orientação, e só concede
   // dentro do próprio gesto de toque que abriu esta tela.
+  let _temBussola = false;
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
     try { await DeviceOrientationEvent.requestPermission(); } catch (e) {}
   }
 
   _ccRadarOrientHandler = function (ev) {
+    if (ev.webkitCompassHeading != null || ev.absolute || ev.alpha != null) _temBussola = true;
     _ccRadarHeadingAtual = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading : (360 - (ev.alpha || 0));
   };
   window.addEventListener("deviceorientationabsolute", _ccRadarOrientHandler, true);
@@ -13300,15 +13309,24 @@ async function ccAbrirRadarMesa(numero) {
     function (pos) {
       const eu = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       const dist = _ccDistM(eu, alvo);
-      const rumo = _ccBearing(eu, alvo);
-      const rel = (rumo - _ccRadarHeadingAtual + 360) % 360;
+      const chegou = dist < 1.5; // "NO ALVO" a menos de 1,5 m
       const seta   = document.getElementById("cc-radar-seta");
       const label  = document.getElementById("cc-radar-label");
       const distEl = document.getElementById("cc-radar-dist");
       const precEl = document.getElementById("cc-radar-prec");
-      if (seta)  seta.style.transform = `rotate(${rel}deg)`;
-      if (label) label.textContent = dist < 3 ? "✅ VOCÊ CHEGOU" : _ccRotuloDirecao(rel);
-      if (distEl) distEl.textContent = dist < 3 ? "Chegou!" : `${Math.round(dist)} m`;
+      if (_temBussola) {
+        // Bússola disponível: seta + rótulo de direção normalmente.
+        const rumo = _ccBearing(eu, alvo);
+        const rel = (rumo - _ccRadarHeadingAtual + 360) % 360;
+        if (seta) { seta.style.display = "inline-block"; seta.style.transform = `rotate(${rel}deg)`; }
+        if (label) label.textContent = chegou ? "🎯 NO ALVO" : _ccRotuloDirecao(rel);
+      } else {
+        // Sem giroscópio/bússola no aparelho (ou permissão negada): cai
+        // pro modo só-distância, sem fingir uma direção que não existe.
+        if (seta) seta.style.display = "none";
+        if (label) label.textContent = chegou ? "🎯 NO ALVO" : "📍 Siga em direção à mesa (sem bússola neste aparelho)";
+      }
+      if (distEl) distEl.textContent = chegou ? "Chegou!" : `${Math.round(dist)} m`;
       if (precEl) precEl.textContent = `precisão ±${Math.round(pos.coords.accuracy)}m`;
     },
     function (err) {
