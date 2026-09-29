@@ -57,6 +57,9 @@ window.COOKCONTROL_CONFIG = {
   // Supabase Storage — onde as fotos de produto enviadas pelo Admin são guardadas
   storageBucket: "cardapio-fotos",
   storageFolder: "produtos",
+  storageFolderMarca: "marca",
+  fallbackBanner: "images/banner-farol.jpg",
+  fallbackLogo: "images/logo-beachfarol.png",
 
   // Módulo de Pagamentos (maquininhas) — identificador único deste restaurante
   // e endereço do backend que fala com as adquirentes.
@@ -136,12 +139,86 @@ window.COOKCONTROL_CONFIG = {
       _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
       _online = true;
       console.log("[Sync] ✅ Supabase conectado:", SUPABASE_URL);
-      _empurrarTudoQueJaExisteLocal(); // manda pro servidor o que já foi editado neste aparelho
-      _pullRemote(); // preenche do servidor só as chaves que este aparelho ainda não tem
+      // Nuvem primeiro: mídias (logo/banner/abas/fotos) já salvas no Supabase nunca são sobrescritas por um aparelho/deploy "zerado".
+      _midiaMesclarDaNuvem().then(function(){
+        _empurrarTudoQueJaExisteLocal(); // manda pro servidor o que já foi editado neste aparelho
+        _pullRemote(); // preenche do servidor só as chaves que este aparelho ainda não tem
+      });
     } catch(e) {
       console.warn("[Sync] Supabase indisponível, modo offline:", e.message);
     }
   }
+
+  var _pularPush = {};
+  function _tempo(ms){ return new Promise(function(r){ setTimeout(function(){ r({ timeout: true }); }, ms); }); }
+  async function _lerRemoto(key){
+    var r = await Promise.race([
+      _sb.from(SYNC_MAP[key]).select("dados").eq("chave", _chaveNs(key)).maybeSingle(),
+      _tempo(7000)
+    ]);
+    if (!r || r.timeout || r.error) return { falhou: true };
+    return { dados: r.data ? r.data.dados : undefined };
+  }
+  function _ehUrlNuvem(u){ return typeof u === "string" && /^https?:\/\//i.test(u); }
+  async function _midiaMesclarDaNuvem(){
+    var mudou = false;
+    try {
+      var rc = await _lerRemoto("config");
+      if (rc.falhou) { _pullFalhou = true; _pularPush.config = true; }
+      else if (rc.dados && typeof rc.dados === "object") {
+        _pularPush.config = true;
+        var d = rc.dados;
+        if (typeof config !== "undefined") {
+          var m1 = false;
+          if (_ehUrlNuvem(d.designLogo) && config.designLogo !== d.designLogo) { config.designLogo = d.designLogo; m1 = true; }
+          if (_ehUrlNuvem(d.designBanner) && config.designBanner !== d.designBanner) { config.designBanner = d.designBanner; m1 = true; }
+          if (d.clientTabImages && typeof d.clientTabImages === "object") {
+            config.clientTabImages = config.clientTabImages || {};
+            Object.keys(d.clientTabImages).forEach(function(k){
+              if (_ehUrlNuvem(d.clientTabImages[k]) && config.clientTabImages[k] !== d.clientTabImages[k]) { config.clientTabImages[k] = d.clientTabImages[k]; m1 = true; }
+            });
+          }
+          if (m1) {
+            mudou = true;
+            try { localStorage.setItem("solbahia_config", JSON.stringify(window._midiaSemFallback ? window._midiaSemFallback(config) : config)); } catch(e) {}
+          }
+        }
+      }
+      var rk = await _lerRemoto("categorias");
+      if (rk.falhou) { _pularPush.categorias = true; }
+      else if (Array.isArray(rk.dados)) {
+        _pularPush.categorias = true;
+        if (typeof categorias !== "undefined") {
+          var m2 = false;
+          rk.dados.forEach(function(rcat){
+            var lcat = categorias.find(function(c){ return c.id === rcat.id; });
+            if (!lcat) return;
+            (rcat.itens || []).forEach(function(ri){
+              var li = lcat.itens.find(function(i){ return i.id === ri.id; });
+              if (!li) { lcat.itens.push(ri); m2 = true; return; }
+              if (_ehUrlNuvem(ri.img) && li.img !== ri.img) { li.img = ri.img; m2 = true; }
+            });
+          });
+          if (m2) {
+            mudou = true;
+            try { localStorage.setItem("solbahia_categorias", JSON.stringify(window._slimCategorias ? window._slimCategorias(categorias, false) : categorias)); } catch(e) {}
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[Sync] mesclagem de mídias falhou:", e && e.message);
+      _pularPush.config = true; _pularPush.categorias = true;
+    }
+    if (mudou) {
+      try { if (typeof ccAtualizarBannerCardapio === "function") ccAtualizarBannerCardapio(); } catch(e) {}
+      try { if (typeof aplicarIdentidadeVisualCliente === "function") aplicarIdentidadeVisualCliente(); } catch(e) {}
+      try { if (typeof ccAplicarIconesAbasCliente === "function") ccAplicarIconesAbasCliente(); } catch(e) {}
+      try { if (typeof render === "function") render(); } catch(e) {}
+      try { if (typeof renderAdmin === "function") renderAdmin(); } catch(e) {}
+      console.log("[Sync] Mídias restauradas da nuvem");
+    }
+  }
+  var _pullFalhou = false;
 
   /* Reativação da sincronização (depois de meses só em localStorage): sem
      isso, tudo que já foi editado neste aparelho (cardápio, preços, banner,
@@ -149,6 +226,7 @@ window.COOKCONTROL_CONFIG = {
      estiver vazia, e aqui ela nunca está. Roda uma vez, ao ligar o Sync. */
   function _empurrarTudoQueJaExisteLocal() {
     for (var key in SYNC_MAP) {
+      if (_pularPush[key]) continue; // já existe na nuvem: não sobrescrever com dados de um aparelho novo
       var localVal = localStorage.getItem("solbahia_" + key);
       if (localVal === null) continue;
       try { _push(key, JSON.parse(localVal)); }
@@ -223,7 +301,7 @@ window.COOKCONTROL_CONFIG = {
 
     window.salvar = function(key, val) {
       _salvarOrig(key, val);      // localStorage primeiro (síncrono)
-      _push(key, key === "categorias" && window._slimCategorias ? window._slimCategorias(val, false) : val);            // Supabase depois (assíncrono, não bloqueia)
+      _push(key, key === "categorias" && window._slimCategorias ? window._slimCategorias(val, false) : (key === "config" && window._midiaSemFallback ? window._midiaSemFallback(val) : val));            // Supabase depois (assíncrono, não bloqueia)
     };
 
     console.log("[Sync] salvar() interceptada — sincronização ativa");
@@ -509,6 +587,7 @@ body.kds-mode #view-cozinha { max-width:100% !important; padding:0 !important; h
 .stock-fill{height:100%;border-radius:999px;transition:width .4s}
 @media print{body>*:not(#print-comanda){display:none!important}#print-comanda{display:block!important;font-family:monospace;font-size:13px;max-width:300px;margin:0 auto}}
 #print-comanda{display:none}
+img[id^="adm-preview-client-"]:not([src]),img[id^="adm-preview-client-"][src=""]{visibility:hidden}
 </style>
 <style>
 
@@ -2419,11 +2498,20 @@ function _slimCategorias(val, tudo) {
   });
 }
 window._slimCategorias = _slimCategorias;
+function _midiaSemFallback(val) {
+  if (!val || typeof val !== "object") return val;
+  var c = window.COOKCONTROL_CONFIG || {};
+  var out = Object.assign({}, val);
+  if (out.designBanner === c.fallbackBanner || (window.__CC_BANNER_EMBUTIDO && out.designBanner === window.__CC_BANNER_EMBUTIDO)) delete out.designBanner;
+  if (out.designLogo === c.fallbackLogo) delete out.designLogo;
+  return out;
+}
+window._midiaSemFallback = _midiaSemFallback;
 function salvar(key, val) {
   // 100% offline: grava direto no LocalStorage. Retorna false se o navegador recusar (cota cheia).
   var ok = true;
   try {
-    var v = (key === "categorias") ? _slimCategorias(val, false) : val;
+    var v = (key === "categorias") ? _slimCategorias(val, false) : (key === "config" ? _midiaSemFallback(val) : val);
     try {
       localStorage.setItem("solbahia_" + key, JSON.stringify(v));
     } catch(e1) {
@@ -2435,6 +2523,7 @@ function salvar(key, val) {
     ok = false;
     console.warn("[LocalStorage] falha ao salvar", key, e);
   }
+  if (!ok && key !== "categorias" && typeof window.toast === "function") window.toast("❌ Armazenamento do navegador cheio — \""+key+"\" NÃO foi salvo.");
   if (key === "config" && typeof window.ccAtualizarBannerCardapio === "function") window.ccAtualizarBannerCardapio();
   return ok;
 }
@@ -2444,6 +2533,18 @@ function carregar(key, def) {
     return v !== null ? JSON.parse(v) : def;
   } catch(e) { return def; }
 }
+
+/* Libera a cota: categorias antigas gravadas com milhares de KB de fotos base64 travavam o salvar(config) */
+(function(){
+  try {
+    var raw = localStorage.getItem("solbahia_categorias");
+    if (raw && raw.length > 300000) {
+      localStorage.setItem("solbahia_categorias", JSON.stringify(_slimCategorias(JSON.parse(raw), false)));
+    }
+  } catch(e) {
+    try { localStorage.removeItem("solbahia_categorias"); } catch(e2) {}
+  }
+})();
 
 /* ═══════════════════════════════════════
    APP STATE
@@ -2481,6 +2582,17 @@ let categorias = (function(){
   });
 })();
 let config     = carregar("config", DEFAULT_CONFIG);
+(function(){
+  try {
+    ["designLogo","designBanner"].forEach(function(k){ if (typeof config[k]==="string" && config[k].indexOf("blob:")===0) delete config[k]; });
+    if (config.clientTabImages) Object.keys(config.clientTabImages).forEach(function(k){
+      var u = config.clientTabImages[k];
+      if (!u || String(u).indexOf("blob:")===0) delete config.clientTabImages[k];
+    });
+    // Rede de segurança: sem banner no banco/aparelho, usa o arquivo físico images/banner-farol.jpg (nunca gravado como dado).
+    if (!config.designBanner) config.designBanner = (window.COOKCONTROL_CONFIG || {}).fallbackBanner;
+  } catch(e) {}
+})();
 let historico  = carregar("historico", []); // [{id,data,mesa,itens,total,pag}]
 let mesaStatus = carregar("mesaStatus", {}); // {1: "livre"|"ocupada"|"conta"}
 let mesaGeo    = {};                          // {1: {lat,lng}} -- posição da mesa/guarda-sol no mapa (não da pessoa), só em memória (vem do pull/realtime do Supabase)
@@ -3441,17 +3553,17 @@ function _validarUrlImagem(url) {
 
 /* Envia o arquivo para o Supabase Storage e retorna a URL pública.
    Lança erro se o client não estiver disponível ou o upload falhar. */
-async function _uploadImagemParaStorage(file) {
+async function _uploadImagemParaStorage(file, pasta) {
   var sb = (typeof SupaSync !== "undefined") ? SupaSync.getClient() : null;
   if (!sb) throw new Error("Supabase indisponível — não é possível enviar a imagem agora.");
 
   var cfg = window.COOKCONTROL_CONFIG;
   var ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
-  var caminho = cfg.storageFolder + "/" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) + "." + ext;
+  var caminho = (pasta || cfg.storageFolder) + "/" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) + "." + ext;
 
   var { error: erroUpload } = await sb.storage
     .from(cfg.storageBucket)
-    .upload(caminho, file, { cacheControl: "3600", upsert: false, contentType: file.type });
+    .upload(caminho, file, { cacheControl: "31536000", upsert: false, contentType: file.type || "image/jpeg" });
 
   if (erroUpload) throw erroUpload;
 
@@ -3488,16 +3600,36 @@ function _converterArquivoParaDataURL(file) {
   });
 }
 
+function _comprimirImagemParaBlob(file, max, qual) {
+  return new Promise(function(resolve, reject) {
+    var url = URL.createObjectURL(file);
+    var im = new Image();
+    im.onload = function() {
+      var esc = Math.min(1, max / Math.max(im.width, im.height));
+      var cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(im.width * esc));
+      cv.height = Math.max(1, Math.round(im.height * esc));
+      cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob(function(b){ b ? resolve(b) : reject(new Error("falha ao comprimir a imagem")); }, "image/jpeg", qual);
+    };
+    im.onerror = function(){ URL.revokeObjectURL(url); reject(new Error("imagem invalida")); };
+    im.src = url;
+  });
+}
+
 async function _resolverFotoItem() {
   if (_arquivoImagemSelecionado) {
     var status = document.getElementById("edit-img-upload-status");
-    if (status) status.textContent = "Processando imagem…";
+    if (status) status.textContent = "Enviando para a nuvem…";
     try {
-      var dataUrl = await _converterArquivoParaDataURL(_arquivoImagemSelecionado);
-      if (status) status.textContent = "✅ Pronta";
-      return dataUrl;
+      var blob = await _comprimirImagemParaBlob(_arquivoImagemSelecionado, 900, 0.82);
+      var arq = new File([blob], "foto.jpg", { type: "image/jpeg" });
+      var urlNuvem = await _uploadImagemParaStorage(arq);
+      if (status) status.textContent = "✅ Salva na nuvem";
+      return urlNuvem;
     } catch (e) {
-      toast("⚠️ Nao foi possivel processar a imagem: " + e.message);
+      toast("❌ Não foi possível enviar a foto para a nuvem: " + (e && e.message ? e.message : "erro"));
       if (status) status.textContent = "❌ Falhou";
       throw e;
     }
@@ -14045,26 +14177,87 @@ function salvarConfiguracoesModo() {
 // caminho já usado pra foto de produto — e guarda a URL pública, que aí
 // sim é persistida por salvarConfiguracoesModo() e sincronizada pra
 // todo mundo via _push().
+const CC_MIDIA_MAPA = {
+  "adm-preview-logo":            { k: "designLogo",   max: 0 },
+  "adm-preview-banner":          { k: "designBanner", max: 1600 },
+  "adm-preview-client-cardapio": { tab: "cardapio",    max: 600 },
+  "adm-preview-client-pedidos":  { tab: "pedidos",     max: 600 },
+  "adm-preview-client-conta":    { tab: "conta",       max: 600 },
+  "adm-preview-client-avaliar":  { tab: "avaliar",     max: 600 }
+};
+
+function _ccMidiaAtualizarTela() {
+  try { if (typeof ccAtualizarBannerCardapio === "function") ccAtualizarBannerCardapio(); } catch(e) {}
+  try { if (typeof aplicarIdentidadeVisualCliente === "function") aplicarIdentidadeVisualCliente(); } catch(e) {}
+  try { if (typeof ccAplicarIconesAbasCliente === "function") ccAplicarIconesAbasCliente(); } catch(e) {}
+  try { if (typeof render === "function") render(); } catch(e) {}
+}
+
 async function ccProcessarUploadImagem(inputEl, previewImgId) {
   const file = inputEl.files && inputEl.files[0];
   if (!file) return;
+  const m = CC_MIDIA_MAPA[previewImgId];
   const preview = document.getElementById(previewImgId);
+  const srcAnterior = preview ? (preview.getAttribute("src") || "") : "";
+  const escondidoAntes = preview ? preview.classList.contains("hidden") : true;
 
-  // Prévia instantânea (local, só visual) enquanto sobe de verdade
+  // Prévia instantânea (só visual); NUNCA é gravada
   const previaLocal = URL.createObjectURL(file);
   if (preview) { preview.src = previaLocal; preview.classList.remove("hidden"); }
 
   try {
-    const urlPublica = await _uploadImagemParaStorage(file);
-    if (preview) preview.src = urlPublica;
-    if (typeof toast === "function") toast("✅ Imagem enviada — clique em Salvar pra confirmar.");
-    URL.revokeObjectURL(previaLocal);
+    let arq = file;
+    if (m && m.max) {
+      const blob = await _comprimirImagemParaBlob(file, m.max, 0.85);
+      arq = new File([blob], "midia.jpg", { type: "image/jpeg" });
+    }
+    const urlPublica = await _uploadImagemParaStorage(arq, (window.COOKCONTROL_CONFIG || {}).storageFolderMarca || "marca");
+    if (m) {
+      if (m.k) config[m.k] = urlPublica;
+      else { config.clientTabImages = config.clientTabImages || {}; config.clientTabImages[m.tab] = urlPublica; }
+    }
+    if (preview) { preview.src = urlPublica; preview.classList.remove("hidden"); }
+    salvar("config", config);   // grava local + envia a URL pública para o Supabase (config_estabelecimento)
+    _ccMidiaAtualizarTela();
+    if (typeof toast === "function") toast("✅ Imagem enviada e salva na nuvem.");
   } catch (e) {
-    console.warn("[Upload imagem marca] falhou:", e.message);
-    if (typeof toast === "function") toast("❌ Falha ao enviar imagem: " + e.message);
-    // mantém a prévia local (blob:) pra não perder a seleção visualmente —
-    // não revoga aqui, senão a imagem exibida quebra na hora.
+    console.warn("[Upload imagem marca] falhou:", e && e.message);
+    if (preview) {
+      if (srcAnterior) preview.src = srcAnterior; else preview.removeAttribute("src");
+      if (escondidoAntes) preview.classList.add("hidden");
+    }
+    if (typeof toast === "function") toast("❌ Falha ao enviar imagem: " + (e && e.message ? e.message : "erro") + " — nada foi alterado.");
+  } finally {
+    URL.revokeObjectURL(previaLocal);
+    try { inputEl.value = ""; } catch(e) {}
   }
+}
+
+// Exclusão MANUAL (única forma de a imagem sair da nuvem)
+async function ccRemoverMidia(previewImgId) {
+  const m = CC_MIDIA_MAPA[previewImgId];
+  if (!m) return;
+  if (!confirm("Remover esta imagem definitivamente? O sistema volta a usar a imagem padrão da pasta images/.")) return;
+  const url = m.k ? config[m.k] : (config.clientTabImages || {})[m.tab];
+  if (m.k) delete config[m.k]; else if (config.clientTabImages) delete config.clientTabImages[m.tab];
+  if (!config.designBanner) config.designBanner = (window.COOKCONTROL_CONFIG || {}).fallbackBanner;
+  salvar("config", config);
+  const preview = document.getElementById(previewImgId);
+  if (preview) {
+    if (previewImgId === "adm-preview-banner") { preview.src = config.designBanner; }
+    else { preview.removeAttribute("src"); if (previewImgId === "adm-preview-logo") preview.classList.add("hidden"); }
+  }
+  try {
+    const cfg = window.COOKCONTROL_CONFIG || {};
+    const sb = (typeof SupaSync !== "undefined") ? SupaSync.getClient() : null;
+    const marca = "/object/public/" + cfg.storageBucket + "/";
+    if (sb && typeof url === "string" && url.indexOf(marca) !== -1) {
+      const caminho = decodeURIComponent(url.split(marca)[1].split("?")[0]);
+      await sb.storage.from(cfg.storageBucket).remove([caminho]);
+    }
+  } catch (e) { console.warn("[Mídia] remoção no Storage falhou:", e && e.message); }
+  _ccMidiaAtualizarTela();
+  if (typeof toast === "function") toast("🗑️ Imagem removida.");
 }
 
 // ─── ÍCONES DAS 4 ABAS DO CLIENTE: aplica as imagens enviadas pelo admin ──
@@ -14165,11 +14358,13 @@ function renderCardsServicoCliente() {
 }
 
 function aplicarIdentidadeVisualCliente() {
-  if (!config.designLogo) return;
+  const logoUrl = config.designLogo || (window.COOKCONTROL_CONFIG || {}).fallbackLogo;
+  if (!logoUrl) return;
   const logoEl = document.getElementById("cli-header-logo");
   const emojiEl = document.getElementById("cli-header-emoji");
   if (logoEl) {
-    logoEl.src = config.designLogo;
+    logoEl.onerror = function() { logoEl.classList.add("hidden"); if (emojiEl) emojiEl.classList.remove("hidden"); };
+    logoEl.src = logoUrl;
     logoEl.classList.remove("hidden");
     if (emojiEl) emojiEl.classList.add("hidden");
   }
@@ -18323,12 +18518,13 @@ body.cc-modo-cliente #cc-v6-voltar-inicio.cc-v6-show{display:flex}
    * Depois disso o Admin continua podendo trocar a foto normalmente.
    * Isso evita que uma cópia antiga do localStorage/Supabase reapareça.
    */
+  window.__CC_BANNER_EMBUTIDO = CC_V6_BANNER;
   try{
     if(localStorage.getItem(CC_V6_VERSION) !== "1"){
       var cfg0 = ccV6Cfg();
-      if(cfg0){
-        cfg0.designBanner = CC_V6_BANNER;
-        if(typeof salvar === "function") salvar("config", cfg0);
+      /* Não grava mais o banner embutido (isso sobrescrevia a imagem enviada pelo admin na nuvem a cada deploy). */
+      if(cfg0 && (!cfg0.designBanner || String(cfg0.designBanner).indexOf("data:") === 0)){
+        cfg0.designBanner = (window.COOKCONTROL_CONFIG || {}).fallbackBanner || CC_V6_BANNER;
       }
       localStorage.setItem(CC_V6_VERSION, "1");
     }
@@ -20778,6 +20974,42 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { setTimeout(aquecer, 600); });
   else setTimeout(aquecer, 600);
+})();
+</script>
+<script id="cc-midia-persistente">
+(function(){
+  var C = window.COOKCONTROL_CONFIG || {};
+  document.addEventListener("DOMContentLoaded", function(){
+    // Botão "Remover" ao lado de cada mídia do painel Identidade Visual
+    Object.keys(typeof CC_MIDIA_MAPA !== "undefined" ? CC_MIDIA_MAPA : {}).forEach(function(id){
+      var img = document.getElementById(id);
+      if (!img || !img.parentElement || img.parentElement.querySelector(".cc-midia-remover")) return;
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "cc-midia-remover"; b.textContent = "🗑️ Remover";
+      b.style.cssText = "font-size:11px;font-weight:700;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:4px 8px;cursor:pointer;flex:none";
+      b.onclick = function(){ ccRemoverMidia(id); };
+      img.parentElement.appendChild(b);
+    });
+    // Logo do fallback ausente: nunca mostrar ícone quebrado
+    // Banner do fallback ausente: cai no banner oficial embutido no HTML
+    try {
+      if (typeof config !== "undefined" && config.designBanner === C.fallbackBanner) {
+        var t = new Image();
+        t.onerror = function(){
+          if (config.designBanner === C.fallbackBanner && window.__CC_BANNER_EMBUTIDO) {
+            config.designBanner = window.__CC_BANNER_EMBUTIDO;
+            try { if (typeof ccAtualizarBannerCardapio === "function") ccAtualizarBannerCardapio(); } catch(e) {}
+            try { if (typeof render === "function") render(); } catch(e) {}
+          }
+        };
+        t.src = C.fallbackBanner;
+      }
+    } catch(e) {}
+  });
+  document.addEventListener("error", function(ev){
+    var el = ev.target;
+    if (el && el.tagName === "IMG" && C.fallbackLogo && (el.getAttribute("src") || "").indexOf(C.fallbackLogo) !== -1) el.style.display = "none";
+  }, true);
 })();
 </script>
 </body></html>
