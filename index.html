@@ -4595,6 +4595,7 @@ render();
 <h3 class="font-bold text-xs uppercase tracking-widest text-orange-400 mb-3">📋 Situação das Mesas</h3>
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="at-mesas-grid"></div>
 <p class="text-center text-gray-400 py-8 text-sm hidden" id="at-empty">Nenhuma mesa ativa no momento.</p>
+<div id="at-radar-lista" style="margin-top:10px"></div>
 </div>
 <!-- MODAL: Maquininha / Confirmar Pagamento — ETAPA 2 -->
 <div class="fixed inset-0 z-50 bg-black/65 flex items-end sm:items-center justify-center hidden p-0 sm:p-4" id="maquininha-modal" onclick="if(event.target===this)this.classList.add(&#39;hidden&#39;)">
@@ -6289,6 +6290,23 @@ function renderAtendente() {
   empty && empty.classList.add("hidden");
   grid.className = "cc-mapa";
   if (!_ccMapaArrastando) grid.innerHTML = _ccMontarMapaMesasHTML();
+
+  // ═══ RADAR DO GARÇOM — lista rápida "📍 Localizar" por mesa ativa ═══
+  // Isolado do mapa canvas acima (não mexe em _ccMontarMapaMesasHTML) e
+  // isolado do KDS (renderCozinha nunca chama isto).
+  const radarBox = el("at-radar-lista");
+  if (radarBox) {
+    const ativas = Object.entries(mesaStatus)
+      .filter(([, s]) => s && s !== "livre")
+      .map(([n]) => Number(n))
+      .sort((a, b) => a - b);
+    radarBox.innerHTML = !ativas.length ? "" : `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+      ${ativas.map(n => `<button onclick="ccAbrirRadarMesa(${n})"
+        style="border:1.5px solid #0891b2;border-radius:999px;background:#ecfeff;color:#0e7490;padding:6px 12px;font-size:.72rem;font-weight:800;cursor:pointer">
+        📍 Localizar Mesa ${String(n).padStart(2, "0")}
+      </button>`).join("")}
+    </div>`;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -8935,6 +8953,10 @@ function renderDelivery() {
           <button onclick="ccAbrirLocalizacaoDelivery('${ped.id}')"
             style="border:none;border-radius:8px;background:#0891b2;color:#fff;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer">
             🗺️ Rota
+          </button>
+          <button onclick="ccAbrirWazeDelivery('${ped.id}')"
+            style="border:none;border-radius:8px;background:#33ccff;color:#0f2340;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer">
+            🚗 Waze
           </button>` : ""}
         <button onclick="_whatsDelivery('${ped.id}')"
           style="border:none;border-radius:8px;background:#25d366;color:#fff;padding:7px 10px;font-size:.72rem;font-weight:700;cursor:pointer">
@@ -9362,6 +9384,8 @@ function _injetarPainelQR() {
 
   // Renderizar QR cards
   _renderQRCards();
+
+  if (typeof _injetarPainelCalibracaoMesas === "function") _injetarPainelCalibracaoMesas();
 }
 
 function _renderQRCards() {
@@ -13055,6 +13079,257 @@ function ccAbrirLocalizacaoDelivery(id) {
   window.open(`https://www.google.com/maps/dir/?api=1&destination=${ped.latitude},${ped.longitude}`, "_blank");
 }
 
+// Mesma coordenada, mas abrindo direto no Waze do entregador (contingência
+// pedida: só deep-link, sem API de rota paga -- o próprio app calcula
+// km/ETA usando a localização atual do celular como origem).
+function ccAbrirWazeDelivery(id) {
+  const ped = pedidosDelivery.find(function (p) { return p.id === id; });
+  if (!ped || !ped.latitude || !ped.longitude) {
+    if (typeof toast === "function") toast("Ainda não temos a localização de GPS deste pedido.");
+    return;
+  }
+  window.open(`https://waze.com/ul?ll=${ped.latitude},${ped.longitude}&navigate=yes`, "_blank");
+}
+
+// ══════════════════════════════════════════════════════════════
+// CALIBRAÇÃO DE POSIÇÃO DAS MESAS + RADAR (SETA/METROS) DO GARÇOM
+//   Módulo isolado: GPS e sensor de orientação só ligam quando o garçom
+//   abre a tela "Localizar Mesa" na view Atendente. O KDS (renderCozinha)
+//   nunca referencia nada daqui -- fica isolado por completo.
+// ══════════════════════════════════════════════════════════════
+
+let ccCalibracaoMesas = carregar("calibracaoMesas", {}); // {"8":{lat,lng,setor,prec,ts}}
+function _ccSalvarCalibracaoMesas() { salvar("calibracaoMesas", ccCalibracaoMesas); }
+
+function ccCalibrarPosicaoMesa() {
+  const sel = document.getElementById("cal-mesa-sel");
+  const setorInp = document.getElementById("cal-mesa-setor");
+  const num = sel && sel.value;
+  if (!num) { toast("⚠️ Selecione a mesa antes de salvar a posição."); return; }
+  if (!navigator.geolocation) { toast("⚠️ Este navegador não tem GPS disponível."); return; }
+  const btn = document.getElementById("cal-mesa-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "📡 Capturando..."; }
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      ccCalibracaoMesas[num] = {
+        lat: pos.coords.latitude, lng: pos.coords.longitude,
+        prec: pos.coords.accuracy,
+        setor: (setorInp && setorInp.value.trim()) || (ccCalibracaoMesas[num] ? ccCalibracaoMesas[num].setor : "") || "",
+        ts: Date.now()
+      };
+      _ccSalvarCalibracaoMesas();
+      if (btn) { btn.disabled = false; btn.textContent = "📍 Salvar Posição Aqui"; }
+      toast(`✅ Mesa ${num} calibrada (±${Math.round(pos.coords.accuracy)}m)`);
+      _ccRenderListaCalibracao();
+    },
+    function (err) {
+      if (btn) { btn.disabled = false; btn.textContent = "📍 Salvar Posição Aqui"; }
+      toast("⚠️ Não deu pra capturar o GPS: " + err.message);
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
+function ccApagarCalibracaoMesa(num) {
+  delete ccCalibracaoMesas[num];
+  _ccSalvarCalibracaoMesas();
+  _ccRenderListaCalibracao();
+}
+
+function _ccRenderListaCalibracao() {
+  const box = document.getElementById("cal-mesa-lista");
+  if (!box) return;
+  const nums = Object.keys(ccCalibracaoMesas).sort(function (a, b) { return Number(a) - Number(b); });
+  if (!nums.length) { box.innerHTML = `<p style="font-size:.72rem;color:#9ca3af">Nenhuma mesa calibrada ainda.</p>`; return; }
+  box.innerHTML = nums.map(function (n) {
+    const c = ccCalibracaoMesas[n];
+    const h = Math.round((Date.now() - c.ts) / 3600000);
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px">
+      <span style="font-size:.74rem"><strong>Mesa ${n}</strong>${c.setor ? " · " + c.setor : ""} <span style="color:#9ca3af">(±${Math.round(c.prec || 0)}m, há ${h}h)</span></span>
+      <button onclick="ccApagarCalibracaoMesa('${n}')" style="border:none;background:none;color:#dc2626;font-size:.8rem;cursor:pointer">🗑️</button>
+    </div>`;
+  }).join("");
+}
+
+// Escaneio opcional do QR físico já colado na mesa, só pra preencher o
+// número sozinho na hora de calibrar (contingência textual obrigatória
+// pra Safari/iOS, que não implementa BarcodeDetector).
+let _ccScanStream = null;
+async function ccEscanearQRMesaCalibracao() {
+  const sel = document.getElementById("cal-mesa-sel");
+  if (!("BarcodeDetector" in window)) {
+    toast("📵 Este navegador (Safari/iPhone) não lê QR pela câmera — digite/selecione o número da mesa na lista acima mesmo.");
+    return;
+  }
+  try {
+    _ccScanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    const video = document.createElement("video");
+    video.srcObject = _ccScanStream; video.setAttribute("playsinline", "true"); video.muted = true;
+    await video.play();
+    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+    const pararTudo = function () {
+      clearInterval(tentativa);
+      if (_ccScanStream) { _ccScanStream.getTracks().forEach(function (t) { t.stop(); }); _ccScanStream = null; }
+    };
+    const tentativa = setInterval(async function () {
+      try {
+        const codes = await detector.detect(video);
+        if (codes.length) {
+          pararTudo();
+          const m = codes[0].rawValue.match(/[?&](?:mesa|m)=(\d+)/i);
+          if (m && sel) { sel.value = m[1]; toast(`✅ Mesa ${m[1]} identificada pelo QR`); }
+          else toast("⚠️ QR lido, mas não achei o número da mesa nele.");
+        }
+      } catch (e) {}
+    }, 400);
+    setTimeout(pararTudo, 15000);
+  } catch (e) {
+    toast("⚠️ Não consegui acessar a câmera — selecione o número manualmente.");
+  }
+}
+
+function _injetarPainelCalibracaoMesas() {
+  if (document.getElementById("painel-calibracao-mesas")) { _ccRenderListaCalibracao(); return; }
+  const adminEl = document.getElementById("view-admin");
+  const ancora = document.getElementById("painel-qr-links");
+  if (!adminEl) return;
+  const total = config.numMesas || 20;
+  let opts = '<option value="">— Selecione —</option>';
+  for (let i = 1; i <= total; i++) opts += `<option value="${i}">Mesa ${String(i).padStart(2, "0")}</option>`;
+  const panel = document.createElement("div");
+  panel.id = "painel-calibracao-mesas";
+  panel.className = "admin-card mb-4";
+  panel.innerHTML = `
+    <p class="font-bold text-sm uppercase tracking-widest text-orange-400 mb-3">📍 Calibrar Posição das Mesas (Radar do Garçom)</p>
+    <p class="text-xs text-gray-400 mb-4">De manhã, ao montar as mesas, ande até cada uma e salve a posição real dela aqui. Isso alimenta a seta de direção e a distância que o garçom vê no celular. As filas/setor são só um texto livre pra organizar -- descreva do seu jeito (ex: "Praia — Fila 1, frente ao mar").</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+      <div style="flex:1;min-width:140px">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Mesa</label>
+        <select class="input-base" id="cal-mesa-sel">${opts}</select>
+      </div>
+      <div style="flex:1;min-width:160px">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Setor / fila (opcional)</label>
+        <input class="input-base" id="cal-mesa-setor" placeholder="Ex: Praia — Fila 1"/>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="cal-mesa-btn" class="btn-primary px-4 py-2.5 text-xs" onclick="ccCalibrarPosicaoMesa()">📍 Salvar Posição Aqui</button>
+      <button class="btn-ghost px-4 py-2.5 text-xs" onclick="ccEscanearQRMesaCalibracao()">📷 Escanear QR da Mesa</button>
+    </div>
+    <div id="cal-mesa-lista" style="margin-top:14px"></div>`;
+  if (ancora && ancora.parentElement === adminEl) adminEl.insertBefore(panel, ancora.nextSibling);
+  else adminEl.prepend(panel);
+  _ccRenderListaCalibracao();
+}
+
+// --- Radar visual: seta de direção (bússola) + distância regressiva ---
+let _ccRadarWatchId = null;
+let _ccRadarOrientHandler = null;
+let _ccRadarHeadingAtual = 0;
+
+function _ccBearing(a, b) {
+  const r = Math.PI / 180;
+  const y = Math.sin((b.lng - a.lng) * r) * Math.cos(b.lat * r);
+  const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lng - a.lng) * r);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function _ccRotuloDirecao(rel) {
+  if (rel >= 315 || rel < 45)  return "⬆️ EM FRENTE";
+  if (rel >= 45  && rel < 135) return "➡️ À DIREITA";
+  if (rel >= 135 && rel < 225) return "⬇️ ATRÁS DE VOCÊ";
+  return "⬅️ À ESQUERDA";
+}
+
+function _ccGarantirRadarModal() {
+  if (document.getElementById("cc-radar-modal")) return;
+  const modal = document.createElement("div");
+  modal.id = "cc-radar-modal";
+  modal.className = "hidden";
+  modal.style.cssText = "position:fixed;inset:0;z-index:70;background:rgba(15,35,64,.55);display:flex;align-items:center;justify-content:center;padding:16px";
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:20px;max-width:340px;width:100%;padding:18px;position:relative">
+      <button onclick="ccFecharRadarMesa()" style="position:absolute;top:10px;right:12px;border:none;background:none;font-size:1.2rem;color:#9ca3af;cursor:pointer">✕</button>
+      <p style="text-align:center;font-weight:900;color:#0f2340;font-size:.85rem;text-transform:uppercase;letter-spacing:.04em">Radar da Mesa</p>
+      <div id="cc-radar-corpo"></div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click", function (ev) { if (ev.target === modal) ccFecharRadarMesa(); });
+}
+
+async function ccAbrirRadarMesa(numero) {
+  _ccGarantirRadarModal();
+  const alvo = ccCalibracaoMesas[numero];
+  const modal = document.getElementById("cc-radar-modal");
+  const corpo = document.getElementById("cc-radar-corpo");
+  modal.classList.remove("hidden");
+  if (!alvo) {
+    corpo.innerHTML = `<p style="text-align:center;color:#6b7280;font-size:.85rem;padding:24px 4px">
+      Mesa ${numero} ainda não foi calibrada.<br/><br/>Peça pro Admin salvar a posição real dela primeiro
+      (Admin → 📍 Calibrar Posição das Mesas).</p>`;
+    return;
+  }
+  corpo.innerHTML = `
+    <div style="text-align:center;padding:10px 0">
+      <p style="font-size:.8rem;color:#6b7280;margin-bottom:4px">Mesa</p>
+      <p style="font-size:1.6rem;font-weight:900;color:#0f2340;margin-bottom:14px">${numero}${alvo.setor ? " · " + alvo.setor : ""}</p>
+      <div id="cc-radar-seta" style="font-size:64px;transition:transform .2s linear;display:inline-block">🧭</div>
+      <p id="cc-radar-label" style="font-size:1rem;font-weight:800;color:#ea580c;margin-top:10px">Aguardando GPS…</p>
+      <p id="cc-radar-dist" style="font-size:2rem;font-weight:900;color:#0f2340;margin-top:4px">-- m</p>
+      <p id="cc-radar-prec" style="font-size:.7rem;color:#9ca3af;margin-top:6px"></p>
+    </div>`;
+
+  // iOS exige permissão explícita pro sensor de orientação, e só concede
+  // dentro do próprio gesto de toque que abriu esta tela.
+  if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+    try { await DeviceOrientationEvent.requestPermission(); } catch (e) {}
+  }
+
+  _ccRadarOrientHandler = function (ev) {
+    _ccRadarHeadingAtual = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading : (360 - (ev.alpha || 0));
+  };
+  window.addEventListener("deviceorientationabsolute", _ccRadarOrientHandler, true);
+  window.addEventListener("deviceorientation", _ccRadarOrientHandler, true);
+
+  if (!navigator.geolocation) {
+    const label = document.getElementById("cc-radar-label");
+    if (label) label.textContent = "Sem GPS neste dispositivo.";
+    return;
+  }
+  _ccRadarWatchId = navigator.geolocation.watchPosition(
+    function (pos) {
+      const eu = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      const dist = _ccDistM(eu, alvo);
+      const rumo = _ccBearing(eu, alvo);
+      const rel = (rumo - _ccRadarHeadingAtual + 360) % 360;
+      const seta   = document.getElementById("cc-radar-seta");
+      const label  = document.getElementById("cc-radar-label");
+      const distEl = document.getElementById("cc-radar-dist");
+      const precEl = document.getElementById("cc-radar-prec");
+      if (seta)  seta.style.transform = `rotate(${rel}deg)`;
+      if (label) label.textContent = dist < 3 ? "✅ VOCÊ CHEGOU" : _ccRotuloDirecao(rel);
+      if (distEl) distEl.textContent = dist < 3 ? "Chegou!" : `${Math.round(dist)} m`;
+      if (precEl) precEl.textContent = `precisão ±${Math.round(pos.coords.accuracy)}m`;
+    },
+    function (err) {
+      const label = document.getElementById("cc-radar-label");
+      if (label) label.textContent = "⚠️ GPS indisponível: " + err.message;
+    },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+  );
+}
+
+function ccFecharRadarMesa() {
+  const modal = document.getElementById("cc-radar-modal");
+  if (modal) modal.classList.add("hidden");
+  if (_ccRadarWatchId !== null) { navigator.geolocation.clearWatch(_ccRadarWatchId); _ccRadarWatchId = null; }
+  if (_ccRadarOrientHandler) {
+    window.removeEventListener("deviceorientationabsolute", _ccRadarOrientHandler, true);
+    window.removeEventListener("deviceorientation", _ccRadarOrientHandler, true);
+    _ccRadarOrientHandler = null;
+  }
+}
+
 // ─── SINAL DE CONFIRMAÇÃO COMBINADO (Mesa fixa + GPS vivo do celular) ──
 // Módulo isolado — NÃO altera ccCapturarGeoMesa()/ccGravarGeoMesa() (a
 // posição fixa do guarda-sol/mesa continua exatamente como está, uma
@@ -13066,29 +13341,6 @@ function ccAbrirLocalizacaoDelivery(id) {
 // da mesa com o sinal vivo do celular. Nunca bloqueia nem atrasa o
 // pedido/campainha: roda fire-and-forget e falha em silêncio se o
 // cliente negar o GPS ou o navegador não suportar.
-// RASTREAMENTO SILENCIOSO DE FUNDO: em vez de pedir uma leitura pontual de
-// GPS bem no instante do clique (o que, no 4G/5G instável da praia, pode
-// estourar o timeout antes do satélite responder e mandar a coordenada em
-// branco), mantemos um watchPosition rodando em segundo plano desde o
-// carregamento da página. A última posição válida fica cacheada em
-// _ccUltimaGeoConfirmacao; o clique em "Confirmar Pedido"/"Tocar Campainha"
-// só LÊ esse cache na hora -- nunca espera o GPS responder.
-let _ccUltimaGeoConfirmacao = null;
-let _ccWatchIdGeoConfirmacao = null;
-function ccIniciarRastreioSilenciosoGeoConfirmacao() {
-  if (!navigator.geolocation || _ccWatchIdGeoConfirmacao !== null) return;
-  _ccWatchIdGeoConfirmacao = navigator.geolocation.watchPosition(
-    function (pos) {
-      _ccUltimaGeoConfirmacao = { lat: pos.coords.latitude, lng: pos.coords.longitude, prec: pos.coords.accuracy, ts: Date.now() };
-    },
-    function (err) {
-      console.warn("[Geo confirmação] watchPosition não conseguiu atualizar:", err.message);
-    },
-    { enableHighAccuracy: true, maximumAge: 0 }
-  );
-}
-// (rastreio de fundo desativado: o celular só é localizado no instante em que o cliente aprova o pedido / toca a campainha)
-
 function ccCapturarGeoConfirmacao() {
   // Chamada no instante do toque em "Confirmar Pedido"/"Campainha" (dentro do
   // gesto do cliente). Roda em paralelo e NUNCA trava o pedido: o destino da
