@@ -159,7 +159,7 @@ window.COOKCONTROL_CONFIG = {
     if (!r || r.timeout || r.error) return { falhou: true };
     return { dados: r.data ? r.data.dados : undefined };
   }
-  function _ehUrlNuvem(u){ return typeof u === "string" && /^https?:\/\//i.test(u); }
+  function _ehUrlNuvem(u){ return typeof u === "string" && /^https?:\/\//i.test(u) && (!window._midiaUrlValida || window._midiaUrlValida(u)); }
   async function _midiaMesclarDaNuvem(){
     var mudou = false;
     try {
@@ -168,6 +168,10 @@ window.COOKCONTROL_CONFIG = {
       else if (rc.dados && typeof rc.dados === "object") {
         _pularPush.config = true;
         var d = rc.dados;
+        if (window._midiaSemFallback) {   // remove da nuvem endereços inválidos (ex.: a própria index.html) gravados por versões antigas
+          var limpo = window._midiaSemFallback(d);
+          if (JSON.stringify(limpo) !== JSON.stringify(d)) { d = limpo; _push("config", d); }
+        }
         if (typeof config !== "undefined") {
           var m1 = false;
           if (_ehUrlNuvem(d.designLogo) && config.designLogo !== d.designLogo) { config.designLogo = d.designLogo; m1 = true; }
@@ -2504,9 +2508,29 @@ function _midiaSemFallback(val) {
   var out = Object.assign({}, val);
   if (out.designBanner === c.fallbackBanner || (window.__CC_BANNER_EMBUTIDO && out.designBanner === window.__CC_BANNER_EMBUTIDO)) delete out.designBanner;
   if (out.designLogo === c.fallbackLogo) delete out.designLogo;
+  if (out.designLogo !== undefined && !_midiaUrlValida(out.designLogo)) delete out.designLogo;
+  if (out.designBanner !== undefined && !_midiaUrlValida(out.designBanner)) delete out.designBanner;
+  if (out.clientTabImages && typeof out.clientTabImages === "object") {
+    var t = {};
+    Object.keys(out.clientTabImages).forEach(function(k){ if (_midiaUrlValida(out.clientTabImages[k])) t[k] = out.clientTabImages[k]; });
+    out.clientTabImages = t;
+  }
   return out;
 }
 window._midiaSemFallback = _midiaSemFallback;
+function _midiaUrlValida(u) {
+  if (typeof u !== "string") return false;
+  u = u.trim();
+  if (!u || /^blob:/i.test(u)) return false;
+  var base = u.split(/[?#]/)[0];
+  if (/^https?:\/\//i.test(u)) {
+    if (/\.html?$/i.test(base) || /\/$/.test(base)) return false;      // endereço de página, não de imagem
+    try { if (base === String(location.href).split(/[?#]/)[0]) return false; } catch(e) {}
+    return true;
+  }
+  return /^(data:image\/|images\/)/i.test(u);
+}
+window._midiaUrlValida = _midiaUrlValida;
 function salvar(key, val) {
   // 100% offline: grava direto no LocalStorage. Retorna false se o navegador recusar (cota cheia).
   var ok = true;
@@ -2584,10 +2608,9 @@ let categorias = (function(){
 let config     = carregar("config", DEFAULT_CONFIG);
 (function(){
   try {
-    ["designLogo","designBanner"].forEach(function(k){ if (typeof config[k]==="string" && config[k].indexOf("blob:")===0) delete config[k]; });
+    ["designLogo","designBanner"].forEach(function(k){ if (config[k] !== undefined && !_midiaUrlValida(config[k])) delete config[k]; });
     if (config.clientTabImages) Object.keys(config.clientTabImages).forEach(function(k){
-      var u = config.clientTabImages[k];
-      if (!u || String(u).indexOf("blob:")===0) delete config.clientTabImages[k];
+      if (!_midiaUrlValida(config.clientTabImages[k])) delete config.clientTabImages[k];
     });
     // Rede de segurança: sem banner no banco/aparelho, usa o arquivo físico images/banner-farol.jpg (nunca gravado como dado).
     if (!config.designBanner) config.designBanner = (window.COOKCONTROL_CONFIG || {}).fallbackBanner;
@@ -3407,7 +3430,7 @@ function renderAdmin() {
   const clientImgMap = (config.clientTabImages || {});
   Object.keys(clientImgMap).forEach(k => {
     const el = document.getElementById('adm-preview-client-' + k);
-    if(el && clientImgMap[k]) el.src = clientImgMap[k];
+    if(el && _midiaUrlValida(clientImgMap[k])) el.src = clientImgMap[k];
   });
 
   // Categoria pills no admin
@@ -14134,20 +14157,23 @@ function salvarConfiguracoesModo() {
   var _aindaEnviando = false;
   var previewLogo = document.getElementById("adm-preview-logo");
   var previewBanner = document.getElementById("adm-preview-banner");
-  if (previewLogo && !previewLogo.classList.contains("hidden") && previewLogo.src) {
-    if (previewLogo.src.startsWith("blob:")) _aindaEnviando = true;
-    else config.designLogo = previewLogo.src;
+  var _srcLogo = previewLogo ? (previewLogo.getAttribute("src") || "") : "";
+  var _srcBanner = previewBanner ? (previewBanner.getAttribute("src") || "") : "";
+  if (previewLogo && !previewLogo.classList.contains("hidden") && _srcLogo) {
+    if (_srcLogo.startsWith("blob:")) _aindaEnviando = true;
+    else if (_midiaUrlValida(_srcLogo)) config.designLogo = _srcLogo;
   }
-  if (previewBanner && !previewBanner.classList.contains("hidden") && previewBanner.src) {
-    if (previewBanner.src.startsWith("blob:")) _aindaEnviando = true;
-    else config.designBanner = previewBanner.src;
+  if (previewBanner && !previewBanner.classList.contains("hidden") && _srcBanner) {
+    if (_srcBanner.startsWith("blob:")) _aindaEnviando = true;
+    else if (_midiaUrlValida(_srcBanner)) config.designBanner = _srcBanner;
   }
   config.clientTabImages = config.clientTabImages || {};
   ['cardapio','pedidos','conta','avaliar'].forEach(k => {
     const preview = document.getElementById('adm-preview-client-' + k);
-    if (preview && preview.src) {
-      if (preview.src.startsWith("blob:")) _aindaEnviando = true;
-      else config.clientTabImages[k] = preview.src;
+    const _sa = preview ? (preview.getAttribute("src") || "") : "";
+    if (_sa) {
+      if (_sa.startsWith("blob:")) _aindaEnviando = true;
+      else if (_midiaUrlValida(_sa)) config.clientTabImages[k] = _sa;
     }
   });
   if (_aindaEnviando && typeof toast === "function") {
@@ -14272,13 +14298,16 @@ function ccAplicarIconesAbasCliente() {
   nav.querySelectorAll("button[data-cc-nav]").forEach(btn => {
     const chave = btn.getAttribute("data-cc-nav");
     const url = mapa[chave];
-    if (!url) return;
+    if (!_midiaUrlValida(url)) return;
     const iconeAtual = btn.querySelector(".cc-nav-ic");
-    if (!iconeAtual || (iconeAtual.tagName === "IMG" && iconeAtual.src === url)) return;
+    if (!iconeAtual || (iconeAtual.tagName === "IMG" && iconeAtual.getAttribute("src") === url)) return;
+    const svgOriginal = iconeAtual.tagName === "IMG" ? btn._ccSvg : iconeAtual.cloneNode(true);
+    btn._ccSvg = svgOriginal;
     const img = document.createElement("img");
     img.className = "cc-nav-ic";
-    img.src = url;
     img.alt = "";
+    img.onerror = function() { if (svgOriginal && img.parentNode) img.replaceWith(svgOriginal.cloneNode(true)); };
+    img.src = url;
     iconeAtual.replaceWith(img);
   });
 }
