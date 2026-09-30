@@ -63,7 +63,7 @@ window.COOKCONTROL_CONFIG = {
 
   // Módulo de Pagamentos (maquininhas) — identificador único deste restaurante
   // e endereço do backend que fala com as adquirentes.
-  empresaId: "beach-farol-itapua",
+  empresaId: "beach-farol-itapua", // ID padrão e obrigatório deste estabelecimento
   paymentsApiBase: "https://cookcontrol-pagamentos.vercel.app/api/v1"
 };
 
@@ -79,6 +79,7 @@ window.COOKCONTROL_CONFIG = {
 
   if (idDaUrl) {
     localStorage.setItem('solbahia_empresa_id', idDaUrl);
+    localStorage.setItem('solbahia_empresa_id_qr', '1'); // escaneamento explícito de QR
     // Trava aqui o Horário de Entrada e a permissão de dispositivo, no
     // ÚNICO ponto do código que lê a URL antes dela ser reescrita —
     // ccPerfilAtendenteDispositivo() roda bem depois (DOMContentLoaded) e
@@ -93,8 +94,20 @@ window.COOKCONTROL_CONFIG = {
     window.history.replaceState({}, document.title, novaUrl);
   }
 
+  // ID ativo = "beach-farol-itapua" SEMPRE, a menos que um QR Code de ativação
+  // (?ativar_empresa=) tenha sido escaneado explicitamente neste aparelho.
+  // Qualquer valor antigo no localStorage sem o selo do QR é cache residual e é descartado.
+  var EMPRESA_PADRAO = window.COOKCONTROL_CONFIG.empresaId || 'beach-farol-itapua';
   var empresaIdSalvo = localStorage.getItem('solbahia_empresa_id');
-  window.COOKCONTROL_EMPRESA_ID_ATIVA = empresaIdSalvo || window.COOKCONTROL_CONFIG.empresaId || null;
+  var ativadoPorQr = localStorage.getItem('solbahia_empresa_id_qr') === '1';
+  if (!ativadoPorQr || !empresaIdSalvo) {
+    try {
+      localStorage.removeItem('solbahia_empresa_id');
+      localStorage.removeItem('solbahia_empresa_id_qr');
+    } catch (e) {}
+    empresaIdSalvo = null;
+  }
+  window.COOKCONTROL_EMPRESA_ID_ATIVA = empresaIdSalvo || EMPRESA_PADRAO;
 
   // IMPORTANTE: isso NUNCA bloqueia a tela. Sem empresa_id ativa, o app
   // funciona normalmente em modo local (localStorage) — só a sincronização
@@ -263,13 +276,16 @@ window.COOKCONTROL_CONFIG = {
   // Prefixo de isolamento: várias instalações (cliente, demo, padrão) podem
   // compartilhar o mesmo projeto Supabase -- sem isso, todas gravam na
   // mesma linha ("config", "categorias" etc.) e uma sobrescreve a outra.
-  function _chaveNs(key) { return (window.COOKCONTROL_CONFIG.empresaId || "default") + ":" + key; }
+  function _chaveNs(key) { return (window.COOKCONTROL_EMPRESA_ID_ATIVA || window.COOKCONTROL_CONFIG.empresaId || "beach-farol-itapua") + ":" + key; }
 
   async function _push(key, val) {
     if (!_sb || !_online) return;
     var tabela = SYNC_MAP[key];
     if (!tabela) return;
     try {
+      if (key === "pedidosCozinha_v1" && typeof window.ccMesclarAntesDoPush === "function") {
+        try { val = await window.ccMesclarAntesDoPush(key, val, _sb, _chaveNs(key), tabela); } catch (eM) { console.warn("[Sync] mescla falhou:", eM && eM.message); }
+      }
       var payload = {
         chave:        _chaveNs(key),
         dados:        val,              // jsonb
@@ -11581,6 +11597,7 @@ window._gestorCancelar = function(id, canal) {
     if(!outroPed && ped.mesa && !String(ped.mesa).startsWith("🛵")) {
       ccSetMesaStatus(ped.mesa, "livre");
     }
+    if (typeof window.ccCozTombstone === "function") window.ccCozTombstone(id);
     pedidosCozinha.splice(idx, 1);
     salvar("pedidosCozinha_v1", pedidosCozinha);
   }
@@ -14636,7 +14653,7 @@ async function ccPedidosClientePoll() {
       const sb = ccGetSupabaseClient();
       const { data, error } = await sb
         .from("pedidos_cozinha").select("dados")
-        .eq("chave", "pedidosCozinha_v1").maybeSingle();
+        .eq("chave", (window.COOKCONTROL_EMPRESA_ID_ATIVA || window.COOKCONTROL_CONFIG.empresaId) + ":pedidosCozinha_v1").maybeSingle();
       if (!error && data && Array.isArray(data.dados)) {
         const _rk = { pendente: 0, preparo: 1, pronto: 2, entregue: 3 }, _loc = new Map(pedidosCozinha.map(p => [p.id, p]));
         data.dados.forEach(r => {
@@ -20721,6 +20738,149 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     var el = ev.target;
     if (el && el.tagName === "IMG" && C.fallbackLogo && (el.getAttribute("src") || "").indexOf(C.fallbackLogo) !== -1) el.style.display = "none";
   }, true);
+})();
+</script>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   PEDIDOS UNIFICADOS — KDS / Atendente / Mesas / Cliente
+   Um único canal de WebSocket (cc-unificado-<empresa>) + polling de segurança,
+   ambos no mesmo ID ativo (window.COOKCONTROL_EMPRESA_ID_ATIVA). Nunca
+   sobrescreve a fila: sempre mescla por id (status só avança).
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  "use strict";
+  var KEY = "pedidosCozinha_v1";
+  var RANK = { pendente: 0, preparo: 1, pronto: 2, entregue: 3 };
+  var _canal = null, _puxando = false, _debounce = null, _iniciado = false;
+
+  function cfg() { return window.COOKCONTROL_CONFIG || {}; }
+  function empresa() { return window.COOKCONTROL_EMPRESA_ID_ATIVA || cfg().empresaId || "beach-farol-itapua"; }
+  function chaveNs() { return empresa() + ":" + KEY; }
+  function tabela() { return (cfg().syncMap || {})[KEY] || "pedidos_cozinha"; }
+  function tempo(ms) { return new Promise(function (r) { setTimeout(function () { r({ timeout: true }); }, ms); }); }
+
+  function cliente() {
+    var c = cfg();
+    if (!c.supabaseKey || c.supabaseKey === "COLE_SUA_CHAVE_ANON_AQUI" || !window.supabase) return null;
+    try {
+      if (window.SupaSync && typeof window.SupaSync.getClient === "function") {
+        var g = window.SupaSync.getClient();
+        if (g) return g;
+      }
+      if (typeof ccGetSupabaseClient === "function") return ccGetSupabaseClient();
+    } catch (e) {}
+    return null;
+  }
+
+  function lerTomb() { try { return JSON.parse(localStorage.getItem("solbahia_cozRemovidos_v1") || "{}") || {}; } catch (e) { return {}; } }
+  window.ccCozTombstone = function (id) {
+    try {
+      var t = lerTomb(); t[id] = Date.now();
+      var ks = Object.keys(t);
+      if (ks.length > 500) ks.sort(function (a, b) { return t[a] - t[b]; }).slice(0, ks.length - 500).forEach(function (k) { delete t[k]; });
+      localStorage.setItem("solbahia_cozRemovidos_v1", JSON.stringify(t));
+    } catch (e) {}
+  };
+
+  function ts(p) { var t = new Date(p && p.data).getTime(); return isFinite(t) ? t : 0; }
+
+  function mesclar(remoto, local) {
+    var tomb = lerTomb(), out = new Map();
+    (local || []).forEach(function (p) { if (p && p.id && !tomb[p.id]) out.set(p.id, p); });
+    (remoto || []).forEach(function (r) {
+      if (!r || !r.id || tomb[r.id]) return;
+      var l = out.get(r.id);
+      if (!l) { if (r.status !== "entregue") out.set(r.id, r); return; }
+      if ((RANK[r.status] || 0) > (RANK[l.status] || 0)) l.status = r.status;
+      if (r.entregueEm && !l.entregueEm) l.entregueEm = r.entregueEm;
+    });
+    return Array.from(out.values()).sort(function (a, b) { return ts(b) - ts(a); });
+  }
+
+  function assinatura(arr) { return (arr || []).map(function (p) { return p.id + ":" + p.status; }).join("|"); }
+
+  function aplicarLocal(merged) {
+    if (typeof pedidosCozinha === "undefined") return;
+    pedidosCozinha.length = 0;
+    merged.forEach(function (p) { pedidosCozinha.push(p); });
+    try { localStorage.setItem("solbahia_" + KEY, JSON.stringify(pedidosCozinha)); } catch (e) {}
+  }
+
+  function redesenhar() {
+    try {
+      var v = (typeof S !== "undefined" && S) ? S.viewAtual : null;
+      ["Cozinha", "Atendente", "Mesas", "Caixa"].forEach(function (n) {
+        if (v === n.toLowerCase() && typeof window["render" + n] === "function") window["render" + n]();
+      });
+      if (typeof renderCozinha === "function" && document.getElementById("kds-cards-wrap")) renderCozinha();
+      if (typeof ccModoClienteAtivo === "function" && ccModoClienteAtivo()) {
+        if (typeof ccRenderPedidosCliente === "function") ccRenderPedidosCliente();
+        if (typeof ccRenderContaCliente === "function") ccRenderContaCliente();
+      }
+    } catch (e) { console.warn("[Pedidos] redesenhar:", e && e.message); }
+  }
+
+  // Chamado pelo _push do sync: une a fila local com a da nuvem ANTES de gravar.
+  window.ccMesclarAntesDoPush = async function (key, val, sb, ns, tab) {
+    if (key !== KEY || !sb) return val;
+    var r = await Promise.race([sb.from(tab).select("dados").eq("chave", ns).maybeSingle(), tempo(4000)]);
+    if (!r || r.timeout || r.error) return val;
+    var remoto = (r.data && Array.isArray(r.data.dados)) ? r.data.dados : [];
+    var merged = mesclar(remoto, val);
+    if (assinatura(merged) !== assinatura(val)) { aplicarLocal(merged); setTimeout(redesenhar, 0); }
+    return merged;
+  };
+
+  async function puxar() {
+    if (_puxando || typeof pedidosCozinha === "undefined") return;
+    var sb = cliente(); if (!sb) return;
+    _puxando = true;
+    try {
+      var r = await Promise.race([sb.from(tabela()).select("dados").eq("chave", chaveNs()).maybeSingle(), tempo(5000)]);
+      if (!r || r.timeout || r.error) return;
+      var remoto = (r.data && Array.isArray(r.data.dados)) ? r.data.dados : [];
+      var antes = assinatura(pedidosCozinha);
+      var merged = mesclar(remoto, pedidosCozinha);
+      if (assinatura(merged) !== antes) { aplicarLocal(merged); redesenhar(); }
+      // auto-cura: se este aparelho tem algo que a nuvem não tem (ou status mais avançado), reenvia a união
+      var rm = new Map(remoto.map(function (p) { return [p.id, p]; }));
+      var defasada = merged.some(function (p) { var q = rm.get(p.id); return !q || (RANK[q.status] || 0) < (RANK[p.status] || 0); });
+      if (defasada) {
+        await sb.from(tabela()).upsert({ chave: chaveNs(), dados: merged, atualizado_em: new Date().toISOString() }, { onConflict: "chave" });
+      }
+    } catch (e) {
+      console.warn("[Pedidos] puxar:", e && e.message);
+    } finally { _puxando = false; }
+  }
+  window.ccSincronizarPedidosNuvem = puxar;
+
+  function ligarCanal() {
+    var sb = cliente(); if (!sb || _canal) return;
+    try {
+      _canal = sb.channel("cc-unificado-" + empresa())
+        .on("postgres_changes", { event: "*", schema: "public", table: tabela() }, function (payload) {
+          var linha = (payload && (payload.new || payload.old)) || {};
+          if (linha.chave && linha.chave !== chaveNs()) return; // outro estabelecimento: ignora
+          clearTimeout(_debounce);
+          _debounce = setTimeout(puxar, 250);
+        })
+        .subscribe(function (st) { console.log("[Pedidos] canal cc-unificado-" + empresa() + ":", st); });
+    } catch (e) { console.warn("[Pedidos] canal:", e && e.message); }
+  }
+
+  function iniciar() {
+    if (_iniciado) return;
+    if (!cliente()) return;
+    _iniciado = true;
+    ligarCanal();
+    puxar();
+    setInterval(function () { if (!document.hidden) puxar(); }, 4000); // rede de segurança caso o Realtime da tabela esteja desligado
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) puxar(); });
+  }
+
+  window.addEventListener("load", function () { setTimeout(iniciar, 1500); });
+  window.addEventListener("cc:nuvem-pronta", function () { setTimeout(iniciar, 300); });
 })();
 </script>
 </body></html>
