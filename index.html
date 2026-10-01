@@ -80,6 +80,10 @@ window.COOKCONTROL_CONFIG = {
   if (idDaUrl) {
     localStorage.setItem('solbahia_empresa_id', idDaUrl);
     localStorage.setItem('solbahia_empresa_id_qr', '1'); // escaneamento explícito de QR
+    // CARIMBO do ponto eletrônico: guarda QUAL empresa o QR ativou. O turno só
+    // libera se o carimbo for igual ao empresaId deste estabelecimento.
+    localStorage.setItem('solbahia_turno_carimbo', idDaUrl);
+    sessionStorage.setItem('cc_turno_carimbo', idDaUrl);
     // Trava aqui o Horário de Entrada e a permissão de dispositivo, no
     // ÚNICO ponto do código que lê a URL antes dela ser reescrita —
     // ccPerfilAtendenteDispositivo() roda bem depois (DOMContentLoaded) e
@@ -108,6 +112,18 @@ window.COOKCONTROL_CONFIG = {
     empresaIdSalvo = null;
   }
   window.COOKCONTROL_EMPRESA_ID_ATIVA = empresaIdSalvo || EMPRESA_PADRAO;
+
+  // APARELHO DA EQUIPE: ativado por QR (ponto eletrônico), com turno aberto ou com papel de
+  // equipe salvo. Um aparelho assim NUNCA vira "cliente" ao abrir um link ?mesa=N.
+  window.ccDispositivoEquipe = function () {
+    try {
+      var j = function (k) { var v = localStorage.getItem('solbahia_' + k); return v === null ? null : JSON.parse(v); };
+      if (j('perfilAtendenteAtivo') === true) return true;
+      if (j('turnoAtivo')) return true;
+      var r = localStorage.getItem('solbahia_sir_role');
+      return ['atendente', 'gerente', 'dono', 'admin', 'caixa', 'cozinheiro', 'motoboy'].indexOf(r) >= 0;
+    } catch (e) { return false; }
+  };
 
   // IMPORTANTE: isso NUNCA bloqueia a tela. Sem empresa_id ativa, o app
   // funciona normalmente em modo local (localStorage) — só a sincronização
@@ -2859,6 +2875,12 @@ function ccCapturarMesaDaUrl() {
   const params = new URLSearchParams(window.location.search);
   const mesaDaUrl = params.get("mesa");
 
+  // Aparelho da equipe: não existe "mesa do cliente" aqui (e limpa resíduo de testes antigos).
+  if (typeof window.ccDispositivoEquipe === "function" && window.ccDispositivoEquipe()) {
+    try { localStorage.removeItem(CC_MESA_CLIENTE_KEY); } catch (e) {}
+    return;
+  }
+
   if (mesaDaUrl) {
     localStorage.setItem(CC_MESA_CLIENTE_KEY, mesaDaUrl);
   }
@@ -4352,7 +4374,7 @@ render();
 <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Horário de Entrada (travado no escaneamento do QR)</label>
 <div id="at-turno-hora-auto" style="background:#f9fafb;border:1.5px solid #e5e7eb;border-radius:10px;padding:10px 12px;font-weight:800;color:#0f2340;font-size:.9rem">— (escaneie o QR de ativação)</div>
 </div>
-<button class="btn-primary w-full" onclick="ccSalvarTurno()" style="grid-column:1/-1">✅ Iniciar Turno</button>
+<button id="at-turno-btn" class="btn-primary w-full" onclick="ccSalvarTurno()" style="grid-column:1/-1">✅ Iniciar Turno</button>
 </div>
 <div class="hidden" id="at-turno-resumo">
 <div class="flex items-center justify-between flex-wrap gap-2">
@@ -6373,6 +6395,7 @@ function _ccMontarMapaMesasHTML() {
     }
     const b = [];
     if (sel.cham) b.push(`<button class="k" onclick="ccConfirmarPagamentoSmartLink(${sel.p})">✅ Já passei o cartão</button>`);
+    b.push(`<button class="m" onclick="ccAtendenteLancarPedidoMesa(${sel.p})">🍽️ Lançar pedido</button>`);
     if (sel.pronto || sel.peds.length) b.push(`<button class="e" onclick="ccMapaAcao('entregue',${sel.p})">✓ Marcar Entregue</button>`);
     if (sel.conta || sel.pronto || sel.ativa) b.push(`<button class="c" onclick="abrirMaquininhaMesa(${sel.p})">💳 Cobrar</button>`);
     if (sel.ativa) b.push(`<button class="r" onclick="ccCorrigirSessaoMesa(${sel.p})">🔄 Corrigir Sessão</button>`);
@@ -7050,7 +7073,10 @@ const SirAccess = (function() {
       const roleParam = params.get('role');
       if (roleParam && roleParam !== 'cliente' && ROLES[roleParam]) return roleParam;
       try {
-        if (typeof carregar === 'function' && carregar('turnoAtivo', null)) return 'atendente';
+        if (typeof window.ccDispositivoEquipe === 'function' && window.ccDispositivoEquipe()) {
+          const salvo = localStorage.getItem('solbahia_sir_role');
+          return (salvo && salvo !== 'cliente' && salvo !== 'livre' && ROLES[salvo]) ? salvo : 'atendente';
+        }
       } catch (e) {}
       return 'cliente';
     }
@@ -12993,6 +13019,15 @@ function ccCalibrarPosicaoMesa() {
   if (btn) { btn.disabled = true; btn.textContent = "📡 Capturando..."; }
   navigator.geolocation.getCurrentPosition(
     function (pos) {
+      const _lat = pos.coords.latitude, _lng = pos.coords.longitude, _prec = pos.coords.accuracy;
+      const _resetBtn = function () { if (btn) { btn.disabled = false; btn.textContent = "📍 Salvar Posição Aqui"; } };
+      // Proteção contra coordenada nula/simulada e sinal ruim (PC/desktop devolve localização aproximada).
+      if (!isFinite(_lat) || !isFinite(_lng) || (_lat === 0 && _lng === 0) || Math.abs(_lat) > 90 || Math.abs(_lng) > 180) {
+        _resetBtn(); toast("⚠️ Coordenada inválida (0,0 ou simulada). Use o celular, ao ar livre, com GPS ligado."); return;
+      }
+      if (!isFinite(_prec) || _prec > 100) {
+        _resetBtn(); toast(`⚠️ Precisão ruim (±${Math.round(_prec || 0)}m, máximo 100m). Vá para céu aberto e tente de novo — não salvei.`); return;
+      }
       ccCalibracaoMesas[num] = {
         lat: pos.coords.latitude, lng: pos.coords.longitude,
         prec: pos.coords.accuracy,
@@ -13001,7 +13036,12 @@ function ccCalibrarPosicaoMesa() {
       };
       _ccSalvarCalibracaoMesas();
       if (btn) { btn.disabled = false; btn.textContent = "📍 Salvar Posição Aqui"; }
-      toast(`✅ Mesa ${num} calibrada (±${Math.round(pos.coords.accuracy)}m)`);
+      // Publica a posição calibrada na tabela "mesas" (mapa do atendente lê daqui) e atualiza o mapa local.
+      mesaGeo[Number(num)] = { lat: _lat, lng: _lng };
+      Promise.resolve(ccGravarGeoMesa(num, _lat, _lng)).then(function () {
+        toast(`✅ Mesa ${num} calibrada e publicada no mapa (±${Math.round(_prec)}m)`);
+      }).catch(function (e) { toast("⚠️ Calibrada neste aparelho, mas não publicou no servidor: " + (e && e.message)); });
+      if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
       _ccRenderListaCalibracao();
     },
     function (err) {
@@ -13015,6 +13055,8 @@ function ccCalibrarPosicaoMesa() {
 function ccApagarCalibracaoMesa(num) {
   delete ccCalibracaoMesas[num];
   _ccSalvarCalibracaoMesas();
+  delete mesaGeo[Number(num)];
+  try { ccGravarGeoMesa(num, null, null); } catch (e) {}
   _ccRenderListaCalibracao();
 }
 
@@ -13059,7 +13101,10 @@ async function ccEscanearQRMesaCalibracao() {
         if (codes.length) {
           pararTudo();
           const m = codes[0].rawValue.match(/[?&](?:mesa|m)=(\d+)/i);
-          if (m && sel) { sel.value = m[1]; toast(`✅ Mesa ${m[1]} identificada pelo QR`); }
+          if (m && sel) {
+            sel.value = m[1]; toast(`✅ Mesa ${m[1]} identificada pelo QR`);
+            if (typeof ccEquipeEscolherAcaoMesa === "function") ccEquipeEscolherAcaoMesa(m[1], { semNavegar: true });
+          }
           else toast("⚠️ QR lido, mas não achei o número da mesa nele.");
         }
       } catch (e) {}
@@ -13070,10 +13115,10 @@ async function ccEscanearQRMesaCalibracao() {
   }
 }
 
-function _injetarPainelCalibracaoMesas() {
+function _injetarPainelCalibracaoMesas(hostId) {
   if (document.getElementById("painel-calibracao-mesas")) { _ccRenderListaCalibracao(); return; }
-  const adminEl = document.getElementById("view-admin");
-  const ancora = document.getElementById("painel-qr-links");
+  const adminEl = document.getElementById(hostId || "view-admin");
+  const ancora = hostId ? null : document.getElementById("painel-qr-links");
   if (!adminEl) return;
   const total = config.numMesas || 20;
   let opts = '<option value="">— Selecione —</option>';
@@ -13103,6 +13148,34 @@ function _injetarPainelCalibracaoMesas() {
   else adminEl.prepend(panel);
   _ccRenderListaCalibracao();
 }
+
+// Garçom (aparelho ativado por QR) não tem a aba Admin: monta a calibração na aba Atendente.
+document.addEventListener("DOMContentLoaded", function () {
+  setTimeout(function () {
+    try {
+      if (carregar("perfilAtendenteAtivo", false) === true && typeof _injetarPainelCalibracaoMesas === "function") {
+        _injetarPainelCalibracaoMesas("view-atendente");
+      }
+    } catch (e) { console.warn("[Calibração] painel no atendente:", e && e.message); }
+  }, 900);
+});
+
+// Publica no servidor as calibrações que só existiam neste aparelho (corrige "sem GPS" no mapa).
+async function ccPublicarCalibracoesPendentes() {
+  try {
+    if (typeof ccEhAcessoCliente === "function" && ccEhAcessoCliente()) return;
+    if (!window.COOKCONTROL_EMPRESA_ID_ATIVA) return;
+    const nums = Object.keys(ccCalibracaoMesas || {});
+    for (const n of nums) {
+      const c = ccCalibracaoMesas[n];
+      if (!c || !isFinite(c.lat) || !isFinite(c.lng) || (c.lat === 0 && c.lng === 0)) continue;
+      mesaGeo[Number(n)] = { lat: c.lat, lng: c.lng };
+      await ccGravarGeoMesa(n, c.lat, c.lng);
+    }
+    if (nums.length && typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
+  } catch (e) { console.warn("[Calibração] publicar pendentes:", e && e.message); }
+}
+document.addEventListener("DOMContentLoaded", function () { setTimeout(ccPublicarCalibracoesPendentes, 4000); });
 
 // --- Radar visual: seta de direção (bússola) + distância regressiva ---
 let _ccRadarWatchId = null;
@@ -13310,10 +13383,16 @@ function ccSetMesaStatus(numero, status, total) {
 
   const hoje = new Date().toISOString().slice(0, 10);
   if (status === "livre") {
-    delete mesaGeo[numero];
     delete mesaGeoDia[numero];
     salvar("mesaGeoDia", mesaGeoDia);
-    ccGravarGeoMesa(numero, null, null); // limpa no servidor -- amanhã a mesa pode estar em outro lugar
+    const _calMesa = (typeof ccCalibracaoMesas !== "undefined") ? ccCalibracaoMesas[numero] : null;
+    if (_calMesa && isFinite(_calMesa.lat) && isFinite(_calMesa.lng)) {
+      // Mesa calibrada: a posição fixa PERMANECE no servidor e no mapa.
+      mesaGeo[numero] = { lat: _calMesa.lat, lng: _calMesa.lng };
+    } else {
+      delete mesaGeo[numero];
+      ccGravarGeoMesa(numero, null, null); // sem calibração: limpa no servidor -- amanhã a mesa pode estar em outro lugar
+    }
     // Limpa também o sinal vivo do celular (pedido/campainha) -- mesa
     // liberada não deve continuar piscando com o sinal do cliente anterior.
     delete mesaGeoCliente[numero];
@@ -13326,7 +13405,8 @@ function ccSetMesaStatus(numero, status, total) {
   } else if (mesaGeoDia[numero] !== hoje) {
     mesaGeoDia[numero] = hoje;
     salvar("mesaGeoDia", mesaGeoDia);
-    ccCapturarGeoMesa(numero);
+    // Posição calibrada manda; só captura o GPS do celular se a mesa NÃO foi calibrada.
+    if (!((typeof ccCalibracaoMesas !== "undefined") && ccCalibracaoMesas[numero])) ccCapturarGeoMesa(numero);
   }
 }
 
@@ -14965,26 +15045,68 @@ function ccAtualizarBoxTurno() {
 // Horário de Entrada TRAVADO no milissegundo exato do escaneamento do QR
 // de ativação (gravado por ccPerfilAtendenteDispositivo, mais abaixo) —
 // nenhum relógio roda na tela, só exibe o valor já congelado.
+// Carimbo válido = QR de ativação do PRÓPRIO estabelecimento (?ativar_empresa=beach-farol-itapua)
+// lido neste aparelho (localStorage), nesta aba (sessionStorage) ou ainda na URL, E horário de entrada travado.
+function ccTurnoCarimboValido() {
+  try {
+    const emp = (window.COOKCONTROL_CONFIG || {}).empresaId || "beach-farol-itapua";
+    const naUrl = new URLSearchParams(window.location.search).get("ativar_empresa");
+    const carimbado = localStorage.getItem("solbahia_turno_carimbo") === emp
+      || sessionStorage.getItem("cc_turno_carimbo") === emp
+      || naUrl === emp;
+    return carimbado && !!carregar("horaEntradaTravada", null);
+  } catch (e) { return false; }
+}
+
 function ccExibirHoraTravada() {
   const el = document.getElementById("at-turno-hora-auto");
-  if (!el) return;
-  const travada = carregar("horaEntradaTravada", null);
-  el.textContent = travada ? new Date(travada).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "— (escaneie o QR de ativação)";
+  const valido = ccTurnoCarimboValido();
+  if (el) {
+    const travada = carregar("horaEntradaTravada", null);
+    el.textContent = (valido && travada)
+      ? new Date(travada).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+      : "🔒 — (escaneie o QR de ativação)";
+  }
+  const btn = document.getElementById("at-turno-btn");
+  if (btn) {
+    btn.disabled = !valido;
+    btn.style.opacity = valido ? "" : ".45";
+    btn.style.cursor = valido ? "" : "not-allowed";
+    btn.title = valido ? "" : "Escaneie o QR de ativação do estabelecimento para liberar";
+  }
 }
 
 function ccSalvarTurno() {
   const nome = (document.getElementById("at-turno-nome")?.value || "").trim();
   const tel = (document.getElementById("at-turno-tel")?.value || "").trim();
   const periodo = document.getElementById("at-turno-periodo")?.value || "";
+  if (!ccTurnoCarimboValido()) {
+    ccExibirHoraTravada();
+    toast("🔒 Turno bloqueado: escaneie o QR de ativação do Beach Farol Itapuã para iniciar.");
+    return;
+  }
   if (!nome || !tel || !periodo) { toast("⚠️ Preencha nome, telefone e turno."); return; }
   const travada = carregar("horaEntradaTravada", null);
-  const hora = travada
-    ? new Date(travada).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-    : new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); // fallback se abriu sem escanear o QR
-  turnoAtivo = { nome, telefone: tel, turno: periodo, horaEntrada: hora, iniciadoEm: travada || new Date().toISOString() };
+  const hora = new Date(travada).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  turnoAtivo = { nome, telefone: tel, turno: periodo, horaEntrada: hora, iniciadoEm: travada };
   salvar("turnoAtivo", turnoAtivo);
   ccAtualizarBoxTurno();
   toast(`✅ Turno de ${nome} iniciado às ${hora}!`);
+
+  // Limpa a barra de endereço (sem recarregar) e libera o mapa de mesas na MESMA aba.
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("ativar_empresa");
+    window.history.replaceState({}, document.title, u.pathname + u.search + u.hash);
+  } catch (e) {}
+  try { sessionStorage.removeItem("cc_ativacao_fresca"); } catch (e) {}
+  try {
+    showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
+    setTimeout(function () {
+      const alvo = document.getElementById("cc-canvas") || document.getElementById("at-mesas-grid");
+      if (alvo && alvo.scrollIntoView) alvo.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 250);
+  } catch (e) { console.warn("[Turno] navegação para o mapa:", e && e.message); }
 }
 
 function ccEncerrarTurno() {
@@ -15004,6 +15126,7 @@ function ccEncerrarTurno() {
   turnoAtivo = null;
   salvar("turnoAtivo", null);
   salvar("horaEntradaTravada", null);
+  try { localStorage.removeItem("solbahia_turno_carimbo"); sessionStorage.removeItem("cc_turno_carimbo"); } catch (e) {}
   const nomeInput = document.getElementById("at-turno-nome");
   const telInput = document.getElementById("at-turno-tel");
   const periodoInput = document.getElementById("at-turno-periodo");
@@ -15062,24 +15185,110 @@ function ccEncerrarTurno() {
 function ccDetectarMesaViaQRAtendente() {
   const params = new URLSearchParams(window.location.search);
   const mesaUrl = params.get("mesa");
-  if (!mesaUrl || !turnoAtivo) return false;
+  if (!mesaUrl) return false;
+  if (!(typeof window.ccDispositivoEquipe === "function" && window.ccDispositivoEquipe())) return false;
   const num = parseInt(mesaUrl, 10);
   if (!num) return false;
-  // Aparelho já é de um atendente em turno: ignora role=cliente da URL do
-  // QR e conecta direto ao atendimento daquela mesa.
+
+  // Aparelho da equipe: NUNCA abre o cardápio do cliente. Só extrai o número da mesa,
+  // preenche a calibração e mantém o garçom na tela de trabalho.
   if (window.SirAccess && typeof window.SirAccess.setRole === "function") {
-    window.SirAccess.setRole("atendente");
+    const salvo = localStorage.getItem("solbahia_sir_role");
+    window.SirAccess.setRole((salvo && salvo !== "cliente" && salvo !== "livre") ? salvo : "atendente");
   }
-  S.mesa = num;
-  setTimeout(() => {
-    showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
-    const sel = document.getElementById("kg-mesa-select");
-    if (sel) { sel.value = String(num); }
-    const box = document.getElementById("atend-quilo-box");
-    if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
-    toast(`🔗 Conectado à Mesa ${String(num).padStart(2, "0")}`);
-  }, 250);
+  try { localStorage.removeItem(CC_MESA_CLIENTE_KEY); } catch (e) {}
+  document.body.classList.remove("cc-modo-cliente", "sir-cliente");
+  window.CC_CARDAPIO_DONO_PREVIEW = false;
+
+  // Limpa ?mesa= e #cliente-mesa da barra de endereço (a detecção é por aparelho, não pela URL).
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("mesa");
+    window.history.replaceState({}, document.title, u.pathname + u.search);
+  } catch (e) {}
+
+  setTimeout(() => ccEquipeEscolherAcaoMesa(num), 250);
   return true;
+}
+
+// ─── EQUIPE + QR DE MESA ────────────────────────────────────────────────
+// 1º escaneamento (mesa sem posição) = POSICIONAR a mesa.
+// Mesa já posicionada = o garçom escolhe: FAZER O PEDIDO da mesa (faz as vezes do cliente)
+// ou ATUALIZAR a posição. Nunca abre o cardápio do cliente sozinho.
+function ccEquipePosicionarMesa(num, opts) {
+  num = parseInt(num, 10);
+  if (!num) return;
+  const semNavegar = !!(opts && opts.semNavegar);
+  if (!semNavegar) {
+    showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
+    if (typeof _injetarPainelCalibracaoMesas === "function") _injetarPainelCalibracaoMesas("view-atendente");
+  }
+  const cal = document.getElementById("cal-mesa-sel");
+  if (cal) cal.value = String(num);
+  const sel = document.getElementById("kg-mesa-select");
+  if (sel) sel.value = String(num);
+  if (!semNavegar) {
+    const alvo = document.getElementById("painel-calibracao-mesas") || document.getElementById("atend-quilo-box");
+    if (alvo && alvo.scrollIntoView) alvo.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  toast(`📍 Mesa ${String(num).padStart(2, "0")} selecionada — fique ao lado dela e toque em "Salvar Posição Aqui".`);
+}
+
+function ccEquipeEscolherAcaoMesa(num, opts) {
+  num = parseInt(num, 10);
+  if (!num) return;
+  const semNavegar = !!(opts && opts.semNavegar);
+  if (!semNavegar) showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
+  const cal = (typeof ccCalibracaoMesas !== "undefined") ? ccCalibracaoMesas[num] : null;
+  const temPos = !!(cal || (typeof mesaGeo !== "undefined" && mesaGeo[num]));
+  if (!temPos) { ccEquipePosicionarMesa(num, opts); return; }
+
+  const rot = String(num).padStart(2, "0");
+  const posHoje = !!(cal && cal.ts && new Date(cal.ts).toDateString() === new Date().toDateString());
+  const quando = cal && cal.ts
+    ? (posHoje ? "posicionada hoje" : "posição de " + new Date(cal.ts).toLocaleDateString("pt-BR"))
+    : "posição já registrada";
+  const antigo = document.getElementById("cc-equipe-escolha-mesa");
+  if (antigo) antigo.remove();
+  const ov = document.createElement("div");
+  ov.id = "cc-equipe-escolha-mesa";
+  ov.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(15,35,64,.72);display:flex;align-items:center;justify-content:center;padding:18px";
+  const bPedido = '<button id="cc-eq-pedido" style="width:100%;padding:15px;border:none;border-radius:14px;background:#ea580c;color:#fff;font-weight:900;font-size:1rem;margin-bottom:10px">🍽️ Fazer o pedido da Mesa ' + rot + '</button>';
+  const bPos = '<button id="cc-eq-pos" style="width:100%;padding:13px;border:2px solid #0f2340;border-radius:14px;background:#fff;color:#0f2340;font-weight:800;font-size:.9rem;margin-bottom:10px">📍 ' + (posHoje ? "Atualizar" : "Salvar") + ' posição desta mesa</button>';
+  ov.innerHTML = '<div style="background:#fff;border-radius:20px;padding:22px;max-width:360px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.4)">'
+    + '<p style="font-weight:900;font-size:1.15rem;color:#0f2340;margin-bottom:2px">Mesa ' + rot + '</p>'
+    + '<p style="font-size:.78rem;color:#6b7280;margin-bottom:16px">' + quando + ' · o que você quer fazer?</p>'
+    + (posHoje ? bPedido + bPos : bPos + bPedido)
+    + '<button id="cc-eq-cancela" style="width:100%;padding:10px;border:none;background:none;color:#6b7280;font-weight:700;font-size:.8rem">Cancelar</button></div>';
+  document.body.appendChild(ov);
+  document.getElementById("cc-eq-pedido").onclick = function () { ov.remove(); ccAtendenteLancarPedidoMesa(num); };
+  document.getElementById("cc-eq-pos").onclick = function () { ov.remove(); ccEquipePosicionarMesa(num, opts); };
+  document.getElementById("cc-eq-cancela").onclick = function () { ov.remove(); };
+}
+
+// Garçom faz as vezes do cliente: abre o cardápio JÁ na mesa N (pedido atribuído ao atendente do turno).
+function ccAtendenteLancarPedidoMesa(num) {
+  num = parseInt(num, 10);
+  if (!num) return;
+  const esc = document.getElementById("cc-equipe-escolha-mesa");
+  if (esc) esc.remove();
+  window.CC_ATENDENTE_PEDIDO_MESA = true;
+  window.CC_CARDAPIO_DONO_PREVIEW = true;
+  document.body.classList.add("cc-dono-preview");
+  S.mesa = num;
+  try {
+    if (typeof window.ABOpenView === "function") window.ABOpenView("cardapio");
+    else showView("cardapio", null);
+  } catch (e) { console.warn("[Pedido pelo garçom] abrir cardápio:", e && e.message); }
+  setTimeout(function () {
+    S.mesa = num;
+    try { if (typeof window.ccDefinirIdentificacao === "function") window.ccDefinirIdentificacao(String(num)); } catch (e) {}
+    ["cc-ident-input-cliente", "cc-ident-input"].forEach(function (id) { const el = document.getElementById(id); if (el) el.value = String(num); });
+    const label = document.getElementById("label-mesa-ativa");
+    if (label) { label.textContent = "Mesa " + String(num).padStart(2, "0"); label.classList.remove("hidden"); }
+    S.mesa = num;
+    toast(`🍽️ Pedido da Mesa ${String(num).padStart(2, "0")} — você está atendendo como garçom.`);
+  }, 450);
 }
 
 
@@ -15483,6 +15692,7 @@ function ccVoltarParaCapaPremium(){
   // encerra somente esse modo de visualização. Nenhum dado do sistema
   // é alterado.
   window.CC_CARDAPIO_DONO_PREVIEW = false;
+  if (window.CC_ATENDENTE_PEDIDO_MESA) { window.CC_ATENDENTE_PEDIDO_MESA = false; try { S.mesa = null; } catch (e) {} }
   document.body.classList.remove('cc-modo-cliente');
   const shellPreview=document.getElementById('view-mesa-cliente');
   if(shellPreview){ shellPreview.classList.add('hidden'); shellPreview.style.display='none'; }
@@ -15524,6 +15734,7 @@ function mount(){let home=document.getElementById('ab-clean-home');if(!home){hom
    cliente por baixo da grade de 10 abas do dono. */
 function ccEhAcessoCliente() {
   try {
+    if (typeof window.ccDispositivoEquipe === "function" && window.ccDispositivoEquipe()) return false;
     const params = new URLSearchParams(window.location.search);
     if (params.get("mesa")) return true;
     if (params.get("role") === "cliente") return true;
@@ -20690,7 +20901,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   function mesaDoCliente() {
     try {
       const m = new URLSearchParams(location.search).get("mesa") || localStorage.getItem(CC_MESA_CLIENTE_KEY);
-      return m && /^\d+$/.test(String(m)) && !carregar("turnoAtivo", null);
+      return m && /^\d+$/.test(String(m)) && !carregar("turnoAtivo", null) && !(window.ccDispositivoEquipe && window.ccDispositivoEquipe());
     } catch (e) { return false; }
   }
   function aquecer() {
