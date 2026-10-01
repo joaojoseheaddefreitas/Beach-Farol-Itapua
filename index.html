@@ -6194,22 +6194,11 @@ function renderAtendente() {
   grid.className = "cc-mapa";
   if (!_ccMapaArrastando) grid.innerHTML = _ccMontarMapaMesasHTML();
 
-  // ═══ RADAR DO GARÇOM — lista rápida "📍 Localizar" por mesa ativa ═══
-  // Isolado do mapa canvas acima (não mexe em _ccMontarMapaMesasHTML) e
-  // isolado do KDS (renderCozinha nunca chama isto).
+  // ═══ RADAR DO GARÇOM — o antigo botão "📍 Localizar Mesa" (popup por mesa) saiu: o rastreamento
+  // agora é contínuo dentro do próprio mapa (_ccMontarMapaMesasHTML). ccAbrirRadarMesa segue
+  // existindo no arquivo, só não é mais exibido aqui.
   const radarBox = el("at-radar-lista");
-  if (radarBox) {
-    const ativas = Object.entries(mesaStatus)
-      .filter(([, s]) => s && s !== "livre")
-      .map(([n]) => Number(n))
-      .sort((a, b) => a - b);
-    radarBox.innerHTML = !ativas.length ? "" : `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-      ${ativas.map(n => `<button onclick="ccAbrirRadarMesa(${n})"
-        style="border:1.5px solid #0891b2;border-radius:999px;background:#ecfeff;color:#0e7490;padding:6px 12px;font-size:.72rem;font-weight:800;cursor:pointer">
-        📍 Localizar Mesa ${String(n).padStart(2, "0")}
-      </button>`).join("")}
-    </div>`;
-  }
+  if (radarBox) radarBox.innerHTML = "";
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -6225,6 +6214,11 @@ let mapaGeoOverride = carregar("mapaGeoOverride", {}); // {num:{lat,lng}} posiç
 let mapaJuncao      = carregar("mapaJuncao", {});      // {secundaria: principal}
 let _ccMapaSel = null, _ccMapaMover = false, _ccMapaTodas = false, _ccMapaArrastando = false;
 let _ccMapaFrameAtual = null, _ccMapaPrimeiro = true;
+// GPS contínuo do garçom + fila de atendimento por proximidade (estado do mapa)
+let _ccGpsWatchId = null, _ccGpsPos = null, _ccGpsPrec = null, _ccGpsTs = 0, _ccGpsErro = "", _ccGpsNegado = false;
+let _ccMapaPts = [];        // [{p, geo}] mesas com coordenada — base do recálculo de distância a cada fix
+let _ccFilaIds = [];        // mesas que pedem o garçom (pedido novo / campainha / pronto p/ entregar)
+let _ccFilaCabeca = null;   // mesa que lidera a fila (com histerese p/ não "pular" por ruído do GPS)
 const _ccMapaVistos = {};
 const _ccEsc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -6268,6 +6262,13 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-btns button{border:0;border-radius:10px;padding:8px 11px;font-size:.74rem;font-weight:800;color:#fff;cursor:pointer}
   .cc-btns .e{background:#16a34a}.cc-btns .c{background:#ea580c}.cc-btns .r{background:#64748b}.cc-btns .l{background:#e2e8f0;color:#334155}.cc-btns .k{background:#f59e0b}.cc-btns .m{background:#0ea5e9}
   .cc-leg{font-size:.62rem;font-weight:700;color:#64748b}
+  .cc-puck .cc-leg{font-size:.55rem;font-weight:900;color:inherit;opacity:.85;margin-top:2px;white-space:nowrap}
+  .cc-puck .cc-leg.alvo{color:#15803d;opacity:1}
+  .cc-ord{position:absolute;top:-9px;right:-9px;min-width:20px;height:20px;border-radius:10px;background:#0f2340;color:#fff;font-style:normal;font-size:.62rem;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;padding:0 4px}
+  .cc-garcom{z-index:6}
+  .cc-fila{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .cc-fi{border-radius:999px;padding:5px 10px;font-size:.72rem;font-weight:900;background:#e2e8f0;color:#334155}
+  .cc-fi.prox{background:#dc2626;color:#fff}
   `;
   document.head.appendChild(st);
 }
@@ -6328,14 +6329,116 @@ function _ccMapaBip() {
   } catch (e) {}
 }
 
+// ═══ GPS CONTÍNUO DO GARÇOM (sem popup) + FILA POR PROXIMIDADE ═══
+// watchPosition único (idempotente): é chamado de dentro de _ccMontarMapaMesasHTML a cada
+// render, mas só existe UM watcher. Cada fix atualiza o DOM no lugar (ponto azul, metragem
+// flutuante, ordem da fila) — sem reconstruir a tela e sem abrir janela.
+function _ccFmtDist(d) {
+  if (d == null) return "";
+  if (d < 1.5) return "NO ALVO";
+  if (d >= 1000) return (d / 1000).toFixed(1) + "km";
+  return Math.round(d) + "m";
+}
+function _ccGpsPosAtual() { return (_ccGpsPos && (Date.now() - _ccGpsTs) < 60000) ? _ccGpsPos : null; } // fix velho (>60s) não vale
+function _ccGpsStatusTxt() {
+  if (_ccGpsErro) return "⚠️ " + _ccGpsErro;
+  if (!_ccGpsPosAtual()) return "📡 Buscando GPS…";
+  return "🔵 GPS ao vivo · ±" + Math.round(_ccGpsPrec || 0) + "m";
+}
+function _ccGpsGarcomIniciar(forcar) {
+  if (_ccGpsWatchId !== null) return;
+  if (_ccGpsNegado && !forcar) return;
+  if (typeof S !== "undefined" && S.viewAtual !== "atendente") return;
+  if (!navigator.geolocation) { _ccGpsErro = "Sem GPS neste aparelho"; return; }
+  _ccGpsNegado = false; _ccGpsErro = "";
+  _ccGpsWatchId = navigator.geolocation.watchPosition(
+    function (pos) {
+      if (!document.getElementById("cc-canvas") || (typeof S !== "undefined" && S.viewAtual !== "atendente")) {
+        navigator.geolocation.clearWatch(_ccGpsWatchId); _ccGpsWatchId = null; return; // saiu da aba: poupa bateria
+      }
+      _ccGpsPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      _ccGpsPrec = pos.coords.accuracy; _ccGpsTs = Date.now(); _ccGpsErro = "";
+      _ccGpsAtualizarMapa();
+    },
+    function (err) {
+      if (err && err.code === 1) { // permissão negada: para o watcher e mostra o motivo no próprio mapa
+        if (_ccGpsWatchId !== null) navigator.geolocation.clearWatch(_ccGpsWatchId);
+        _ccGpsWatchId = null; _ccGpsNegado = true;
+        _ccGpsErro = "GPS bloqueado — libere a localização deste site nos Ajustes do navegador e toque em Ativar GPS";
+      } else { _ccGpsErro = "Sem sinal de GPS no momento — procurando…"; } // timeout/indisponível: o watch continua
+      const st = document.getElementById("cc-gps-status"); if (st) st.textContent = _ccGpsStatusTxt();
+      const bt = document.getElementById("cc-gps-btn"); if (bt) bt.style.display = _ccGpsNegado ? "" : "none";
+    },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+  );
+}
+function _ccFilaOrdenar(dist) {
+  const d = n => (dist[n] != null ? dist[n] : 1e12);
+  const arr = _ccFilaIds.slice().sort((a, b) => d(a) - d(b) || a - b);
+  const c = _ccFilaCabeca;
+  // histerese: a cabeça só troca se a outra mesa estiver >3 m mais perto (evita o foco pular com o ruído do GPS)
+  if (c != null && arr.length > 1 && arr[0] !== c && arr.indexOf(c) >= 0 && dist[c] != null && dist[arr[0]] != null && dist[c] - dist[arr[0]] < 3) {
+    arr.splice(arr.indexOf(c), 1); arr.unshift(c);
+  }
+  return arr;
+}
+function _ccFilaHTML(fila, dist) {
+  if (!fila.length) return `<span class="cc-leg">✅ Nenhuma mesa aguardando atendimento</span>`;
+  return fila.map((n, i) => `<span class="cc-fi${i === 0 ? " prox" : ""}">${i === 0 ? "▶ " : ""}${String(n).padStart(2, "0")}${dist[n] != null ? " · " + _ccFmtDist(dist[n]) : ""}</span>`).join('<span class="cc-leg">›</span>');
+}
+function _ccGarcomHTML(fr) {
+  const pos = _ccGpsPosAtual();
+  if (!pos || !fr) return "";
+  const g = fr.toXY(pos), cl = v => Math.min(96, Math.max(4, v));
+  const fora = g.x < 2 || g.x > 98 || g.y < 2 || g.y > 98;
+  return `<div class="cc-cli cc-garcom" id="cc-garcom-ponto" style="left:${cl(g.x)}%;top:${cl(g.y)}%;color:#0ea5e9"><b style="background:#0ea5e9"></b><span>🔵 Você${fora ? " ↗ fora da área" : ""}</span></div>`;
+}
+// Atualização assíncrona no lugar (chamada a cada fix do GPS) — sem popup, sem reconstruir o mapa
+function _ccGpsAtualizarMapa() {
+  const cv = document.getElementById("cc-canvas");
+  if (!cv) return;
+  const st = document.getElementById("cc-gps-status"); if (st) st.textContent = _ccGpsStatusTxt();
+  const bt = document.getElementById("cc-gps-btn"); if (bt) bt.style.display = _ccGpsNegado ? "" : "none";
+  const pos = _ccGpsPosAtual(), fr = _ccMapaFrameAtual;
+  if (!pos || !fr) return;
+  // ponto azul
+  const html = _ccGarcomHTML(fr);
+  let dot = document.getElementById("cc-garcom-ponto");
+  if (!dot) cv.insertAdjacentHTML("beforeend", html);
+  else { const tmp = document.createElement("div"); tmp.innerHTML = html; const novo = tmp.firstChild; dot.style.left = novo.style.left; dot.style.top = novo.style.top; dot.querySelector("span").textContent = novo.querySelector("span").textContent; }
+  // distâncias reais (_ccDistM) mesa a mesa
+  const dist = {};
+  _ccMapaPts.forEach(o => { dist[o.p] = _ccDistM(pos, o.geo); });
+  const fila = _ccFilaOrdenar(dist);
+  if ((fila.length ? fila[0] : null) !== _ccFilaCabeca) { if (!_ccMapaArrastando) renderAtendente(); return; } // a cabeça da fila mudou: foco avança
+  cv.querySelectorAll(".cc-puck[data-mesa]").forEach(el => {
+    const n = Number(el.getAttribute("data-mesa")), d = dist[n];
+    const lg = el.querySelector(".cc-leg");
+    if (lg) { lg.textContent = d != null ? (el.classList.contains("estim") ? "≈" : "") + _ccFmtDist(d) : ""; lg.classList.toggle("alvo", d != null && d < 1.5); }
+    const idx = fila.indexOf(n); let ord = el.querySelector(".cc-ord");
+    if (idx >= 0) { if (!ord) { ord = document.createElement("i"); ord.className = "cc-ord"; el.insertBefore(ord, el.firstChild); } ord.textContent = idx + 1; }
+    else if (ord) ord.remove();
+  });
+  const fe = document.getElementById("cc-fila"); if (fe) fe.innerHTML = _ccFilaHTML(fila, dist);
+}
+
 function _ccMontarMapaMesasHTML() {
+  _ccGpsGarcomIniciar(); // watchPosition contínuo em segundo plano (idempotente: nunca cria 2 watchers)
   if (config.mapaGeoOverride && typeof config.mapaGeoOverride === "object") mapaGeoOverride = config.mapaGeoOverride; // vem do config sincronizado
   const pad = n => String(n).padStart(2, "0");
   const maxN = Math.max(config.numMesas || 20, ...Object.keys(mesaStatus).map(Number).filter(n => !isNaN(n)), 1);
+  // Toda mesa com coordenada salva (override do dono, mesaGeo ou calibração do admin) entra no mapa,
+  // inclusive número acima de config.numMesas — nenhuma mesa salva fica oculta.
+  const _calPos = n => { try { const c = ccCalibracaoMesas && ccCalibracaoMesas[n]; return (c && isFinite(c.lat) && isFinite(c.lng) && !(c.lat === 0 && c.lng === 0)) ? { lat: c.lat, lng: c.lng } : null; } catch (er) { return null; } };
+  const _nums = [];
+  for (let n = 1; n <= maxN; n++) _nums.push(n);
+  let _calKeys = []; try { _calKeys = Object.keys(ccCalibracaoMesas || {}); } catch (er) {}
+  [].concat(Object.keys(mapaGeoOverride || {}), Object.keys(mesaGeo || {}), _calKeys).map(Number).forEach(n => { if (n >= 1 && isFinite(n) && _nums.indexOf(n) < 0) _nums.push(n); });
+  _nums.sort((a, b) => a - b);
   const grupos = [];
-  for (let n = 1; n <= maxN; n++) {
+  for (const n of _nums) {
     const e = _ccEstadoGrupo(n);
-    const geo = e.g.map(_ccPosMesa).find(Boolean) || null;
+    const geo = e.g.map(m => _ccPosMesa(m) || _calPos(m)).find(Boolean) || null;
     if (!(_ccMapaTodas || e.ativa || geo)) continue;
     e.p = n; e.geo = geo;
     e.estim = !geo && e.sinalN ? mesaGeoCliente[e.sinalN] : null; // sem GPS da mesa: usa onde o cliente clicou
@@ -6345,6 +6448,20 @@ function _ccMontarMapaMesasHTML() {
   const semPos = grupos.filter(e => !e.geo && !e.estim);
   const fr = _ccMapaFrame(comPos.map(e => e.geo || e.estim));
   _ccMapaFrameAtual = fr;
+
+  // distância real garçom→mesa (_ccDistM) + fila de atendimento: pedido novo / campainha / pronto, mais perto primeiro
+  const _gps = _ccGpsPosAtual();
+  _ccMapaPts = comPos.map(e => ({ p: e.p, geo: e.geo || e.estim }));
+  const _dist = {};
+  _ccMapaPts.forEach(o => { _dist[o.p] = _gps ? _ccDistM(_gps, o.geo) : null; });
+  _ccFilaIds = grupos.filter(e => e.novo || e.camp || e.pronto).map(e => e.p);
+  const fila = _ccFilaOrdenar(_dist);
+  const _cabAnt = _ccFilaCabeca, _cab = fila.length ? fila[0] : null;
+  if (_cab !== _cabAnt) {          // a cabeça da fila mudou (entrega concluída, pedido novo ou garçom andou >3 m)
+    _ccFilaCabeca = _cab;
+    if (_cab != null) _ccMapaSel = _cab;            // o foco/folha avança sozinho p/ a próxima mesa mais próxima
+    else if (_ccMapaSel === _cabAnt) _ccMapaSel = null;
+  }
 
   // alertas + bip nos sinais novos
   const alertas = grupos.filter(e => e.camp || e.novo).sort((a, b) => (b.camp ? 1 : 0) - (a.camp ? 1 : 0));
@@ -6360,7 +6477,8 @@ function _ccMontarMapaMesasHTML() {
     const pt = fr.toXY(e.geo || e.estim);
     const cls = e.camp ? "cc-p-campainha" : e.novo ? "cc-p-pedido" : e.pronto ? "cc-p-pronto" : e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
     const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
-    pucks += `<div class="cc-puck ${cls}${e.estim ? " estim" : ""}${_ccMapaSel === e.p ? " sel" : ""}" style="left:${clamp(pt.x)}%;top:${clamp(pt.y)}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot}">${rot}${e.estim ? "<small>📡 estimada</small>" : ""}</div>`;
+    const _oi = fila.indexOf(e.p), _d = _dist[e.p];
+    pucks += `<div class="cc-puck ${cls}${e.estim ? " estim" : ""}${_ccMapaSel === e.p ? " sel" : ""}" data-mesa="${e.p}" style="left:${clamp(pt.x)}%;top:${clamp(pt.y)}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot}${e.estim ? " (posição estimada pelo celular do cliente)" : ""}">${_oi >= 0 ? `<i class="cc-ord">${_oi + 1}</i>` : ""}${rot}<small class="cc-leg${_d != null && _d < 1.5 ? " alvo" : ""}">${_d != null ? (e.estim ? "≈" : "") + _ccFmtDist(_d) : ""}</small></div>`;
     // marcador do sinal do celular (de onde partiu o clique)
     if (e.sinalN && e.geo && (e.camp || e.peds.length)) {
       const c = fr.toXY(mesaGeoCliente[e.sinalN]);
@@ -6415,14 +6533,17 @@ function _ccMontarMapaMesasHTML() {
       <button class="${_ccMapaMover ? "on" : ""}" onclick="ccMapaToggle('mover')">✋ Mover mesas: ${_ccMapaMover ? "LIGADO" : "desligado"}</button>
       <button class="${_ccMapaTodas ? "on" : ""}" onclick="ccMapaToggle('todas')">👁 ${_ccMapaTodas ? "Todas as mesas" : "Só mesas ativas"}</button>
       <button onclick="ccMapaResetTudo()">↺ Voltar posições do GPS</button>
-      <span class="cc-leg">🔴 pedido novo · 🟡 campainha · 🟢 pronto · 🟣 conta · 🟠 ocupada · 📡 celular do cliente</span>
+      <span class="cc-leg">🔴 pedido novo · 🟡 campainha · 🟢 pronto · 🟣 conta · 🟠 ocupada · 📡 celular do cliente · 🔵 você</span>
+      <button id="cc-gps-btn" onclick="_ccGpsGarcomIniciar(true)" style="display:${_ccGpsNegado ? "" : "none"}">📡 Ativar GPS</button>
+      <span class="cc-leg" id="cc-gps-status">${_ccGpsStatusTxt()}</span>
     </div>
+    <div class="cc-fila" id="cc-fila">${_ccFilaHTML(fila, _dist)}</div>
     ${chips ? `<div class="cc-alertas">${chips}</div>` : ""}
     <div class="cc-canvas${_ccMapaMover ? " mover" : ""}" id="cc-canvas">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none">${linhas}</svg>
       <div class="cc-norte">N ↑</div>
       <div class="cc-escala"><i style="width:${fr.barra10m}%;min-width:20px"></i>10 m</div>
-      ${marc}${pucks}
+      ${marc}${_ccGarcomHTML(fr)}${pucks}
       ${grupos.length ? "" : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8a6a12;font-weight:800;font-size:.8rem;text-align:center;padding:20px">Nenhuma mesa armada ainda.<br>As mesas aparecem aqui quando o cliente escaneia o QR.</div>`}
     </div>
     ${folha}`;
