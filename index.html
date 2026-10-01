@@ -5897,8 +5897,8 @@ function confirmarPgto(metodo) {
   if(pedCoz){ pedCoz.status = "entregue"; if(!pedCoz.entregueEm) pedCoz.entregueEm = new Date().toISOString(); }
   salvar("pedidosCozinha_v1", pedidosCozinha);
 
-  // 2. Liberar mesa
-  ccSetMesaStatus(ped.mesa, "livre");
+  // 2. Liberar mesa — só se não sobrou outro pedido em aberto nela (conta separada: paga um por vez)
+  if (!pedidosCozinha.some(p => p.id !== ped.id && p.mesa === ped.mesa && p.status !== "entregue")) ccSetMesaStatus(ped.mesa, "livre");
 
   // 3. Registrar no caixa
   if(typeof pagamentos2 !== "undefined") {
@@ -6194,9 +6194,8 @@ function renderAtendente() {
   grid.className = "cc-mapa";
   if (!_ccMapaArrastando) grid.innerHTML = _ccMontarMapaMesasHTML();
 
-  // ═══ RADAR DO GARÇOM — o antigo botão "📍 Localizar Mesa" (popup por mesa) saiu: o rastreamento
-  // agora é contínuo dentro do próprio mapa (_ccMontarMapaMesasHTML). ccAbrirRadarMesa segue
-  // existindo no arquivo, só não é mais exibido aqui.
+  // ═══ RADAR DO GARÇOM — o botão "📍 Localizar Mesa" (popup por mesa) saiu: a posição agora é o mapa
+  // dinâmico (_ccMontarMapaMesasHTML), definido pelos atendentes via QR + nº da mesa. ccAbrirRadarMesa segue no arquivo.
   const radarBox = el("at-radar-lista");
   if (radarBox) radarBox.innerHTML = "";
 }
@@ -6214,11 +6213,6 @@ let mapaGeoOverride = carregar("mapaGeoOverride", {}); // {num:{lat,lng}} posiç
 let mapaJuncao      = carregar("mapaJuncao", {});      // {secundaria: principal}
 let _ccMapaSel = null, _ccMapaMover = false, _ccMapaTodas = false, _ccMapaArrastando = false;
 let _ccMapaFrameAtual = null, _ccMapaPrimeiro = true;
-// GPS contínuo do garçom + fila de atendimento por proximidade (estado do mapa)
-let _ccGpsWatchId = null, _ccGpsPos = null, _ccGpsPrec = null, _ccGpsTs = 0, _ccGpsErro = "", _ccGpsNegado = false;
-let _ccMapaPts = [];        // [{p, geo}] mesas com coordenada — base do recálculo de distância a cada fix
-let _ccFilaIds = [];        // mesas que pedem o garçom (pedido novo / campainha / pronto p/ entregar)
-let _ccFilaCabeca = null;   // mesa que lidera a fila (com histerese p/ não "pular" por ruído do GPS)
 const _ccMapaVistos = {};
 const _ccEsc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -6262,13 +6256,31 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-btns button{border:0;border-radius:10px;padding:8px 11px;font-size:.74rem;font-weight:800;color:#fff;cursor:pointer}
   .cc-btns .e{background:#16a34a}.cc-btns .c{background:#ea580c}.cc-btns .r{background:#64748b}.cc-btns .l{background:#e2e8f0;color:#334155}.cc-btns .k{background:#f59e0b}.cc-btns .m{background:#0ea5e9}
   .cc-leg{font-size:.62rem;font-weight:700;color:#64748b}
-  .cc-puck .cc-leg{font-size:.55rem;font-weight:900;color:inherit;opacity:.85;margin-top:2px;white-space:nowrap}
-  .cc-puck .cc-leg.alvo{color:#15803d;opacity:1}
-  .cc-ord{position:absolute;top:-9px;right:-9px;min-width:20px;height:20px;border-radius:10px;background:#0f2340;color:#fff;font-style:normal;font-size:.62rem;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;padding:0 4px}
-  .cc-garcom{z-index:6}
-  .cc-fila{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-  .cc-fi{border-radius:999px;padding:5px 10px;font-size:.72rem;font-weight:900;background:#e2e8f0;color:#334155}
-  .cc-fi.prox{background:#dc2626;color:#fff}
+  .cc-lg{display:inline-flex;align-items:center;gap:4px;font-size:.62rem;font-weight:800;color:#475569}
+  .cc-lg i{width:12px;height:12px;border-radius:50%;border:2px solid rgba(0,0,0,.2);display:inline-block}
+  .cc-fx{padding:8px;border-radius:18px;border:2px solid #e2c98a;background:linear-gradient(180deg,#fbf0c9,#f4dfa4);overflow-x:auto}
+  .cc-fx .cc-grade{display:grid;gap:3px;min-width:min-content}
+  .cc-fx .cc-cel{aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;border:1px dashed rgba(138,106,18,.35);border-radius:6px;padding:2px;background:rgba(255,255,255,.35)}
+  .cc-fx .cc-cel.vz{border:0;background:none}
+  .cc-fx .cc-cel.vz.ed{border:1px dashed #0ea5e9;background:rgba(14,165,233,.08);cursor:pointer}
+  .cc-fx .cc-puck{position:relative;transform:none;width:100%;min-width:0;height:auto;aspect-ratio:1/1;padding:0;border-width:2px;border-radius:50%;font-size:.68rem;touch-action:manipulation;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+  .cc-fx .cc-puck.sel{outline:3px solid #0ea5e9;outline-offset:1px;z-index:5}
+  .cc-fx .cc-puck.fora{opacity:.35}
+  .cc-fx .cc-p-livre{background:#e5e7eb;border-color:#cbd5e1;color:#64748b;opacity:1;box-shadow:none}
+  .cc-fx .cc-p-livre.fora{opacity:.35}
+  .cc-fx .cc-p-ocupada{background:#fb923c;border-color:#ea580c;color:#fff}
+  .cc-fx .cc-p-pedido{background:#ef4444;border-color:#b91c1c;color:#fff;animation:ccPulseRed .9s infinite}
+  .cc-fx .cc-p-campainha{background:#facc15;border-color:#ca8a04;color:#422006;animation:ccPulseYel .9s infinite}
+  .cc-fx .cc-p-pronto{background:#22c55e;border-color:#15803d;color:#fff}
+  .cc-fx .cc-p-conta{background:#8b5cf6;border-color:#6d28d9;color:#fff}
+  @keyframes ccPulseRed{50%{background:#fca5a5;color:#7f1d1d;box-shadow:0 0 0 6px rgba(239,68,68,.4)}}
+  @keyframes ccPulseYel{50%{background:#fef9c3;box-shadow:0 0 0 6px rgba(250,204,21,.5)}}
+  .cc-puck .cc-g{position:absolute;top:-4px;right:-3px;font-style:normal;font-size:.55rem;font-weight:900;line-height:1;background:#0f2340;color:#fff;border-radius:8px;padding:1px 3px}
+  .cc-puck .cc-z{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);font-style:normal;font-size:.45rem;font-weight:900;line-height:1;background:#fff;color:#475569;border-radius:6px;padding:1px 2px;border:1px solid #cbd5e1}
+  .cc-puck .cc-ord{position:absolute;top:-4px;left:-3px;min-width:14px;height:14px;border-radius:7px;background:#fff;color:#0f2340;font-style:normal;font-size:.55rem;font-weight:900;display:flex;align-items:center;justify-content:center;border:1.5px solid #0f2340}
+  .cc-edbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#e0f2fe;border:2px solid #0ea5e9;border-radius:12px;padding:8px}
+  .cc-edbar input{flex:1 1 140px;min-width:0;border:1.5px solid #94a3b8;border-radius:8px;padding:6px 8px;font-size:.75rem}
+  .cc-edbar button{border:0;border-radius:10px;padding:7px 10px;font-size:.72rem;font-weight:800;background:#0ea5e9;color:#fff}
   `;
   document.head.appendChild(st);
 }
@@ -6329,223 +6341,161 @@ function _ccMapaBip() {
   } catch (e) {}
 }
 
-// ═══ GPS CONTÍNUO DO GARÇOM (sem popup) + FILA POR PROXIMIDADE ═══
-// watchPosition único (idempotente): é chamado de dentro de _ccMontarMapaMesasHTML a cada
-// render, mas só existe UM watcher. Cada fix atualiza o DOM no lugar (ponto azul, metragem
-// flutuante, ordem da fila) — sem reconstruir a tela e sem abrir janela.
-function _ccFmtDist(d) {
-  if (d == null) return "";
-  if (d < 1.5) return "NO ALVO";
-  if (d >= 1000) return (d / 1000).toFixed(1) + "km";
-  return Math.round(d) + "m";
+// ═══ MAPA DINÂMICO — o QR dá o NÚMERO da mesa; o atendente dá a POSIÇÃO. Sem GPS e sem numeração fixa. ═══
+// Quantidade = config.numMesas (+ mesas cadastradas no mapa + qualquer mesa com atividade).
+// Posição = quadrante {x,y} em config.mapaLayout (sincronizado c/ Supabase pelo salvar("config")). Sem posição → grade automática.
+let _ccEditMapa = false, _ccEdSel = [], _ccEdZonaTxt = "", _ccLiberarConfirma = null;
+let _ccMinhasZonas = (function () { try { return JSON.parse(localStorage.getItem("cc_minhasZonas") || "[]"); } catch (e) { return []; } })(); // zona de ESTE atendente (preferência do aparelho)
+
+function _ccLayoutCfg() {
+  const l = (config.mapaLayout && typeof config.mapaLayout === "object") ? config.mapaLayout : {};
+  return { mesas: (l.mesas && typeof l.mesas === "object") ? l.mesas : {}, ocultas: Array.isArray(l.ocultas) ? l.ocultas.map(Number) : [] };
 }
-function _ccGpsPosAtual() { return (_ccGpsPos && (Date.now() - _ccGpsTs) < 60000) ? _ccGpsPos : null; } // fix velho (>60s) não vale
-function _ccGpsStatusTxt() {
-  if (_ccGpsErro) return "⚠️ " + _ccGpsErro;
-  if (!_ccGpsPosAtual()) return "📡 Buscando GPS…";
-  return "🔵 GPS ao vivo · ±" + Math.round(_ccGpsPrec || 0) + "m";
+function _ccLayoutSalvar(L) { config.mapaLayout = { mesas: L.mesas, ocultas: L.ocultas }; salvar("config", config); }
+function _ccListaMesas() {
+  const L = _ccLayoutCfg(), set = new Set(), ok = m => Number.isInteger(m) && m >= 1;
+  const total = parseInt(config.numMesas, 10) || 0;
+  for (let i = 1; i <= total; i++) if (!L.ocultas.includes(i)) set.add(i);
+  Object.keys(L.mesas).forEach(k => { const m = Number(k); if (ok(m)) set.add(m); });
+  Object.keys(mesaStatus).forEach(k => { const m = Number(k); if (ok(m) && mesaStatus[k] && mesaStatus[k] !== "livre") set.add(m); });
+  pedidosCozinha.forEach(x => { const m = Number(x.mesa); if (ok(m) && x.status !== "entregue") set.add(m); }); // mesa com atividade nunca some
+  _ccMesasChamandoGarcom.forEach(k => { const m = Number(k); if (ok(m)) set.add(m); });
+  return Array.from(set).sort((x, y) => x - y);
 }
-function _ccGpsGarcomIniciar(forcar) {
-  if (_ccGpsWatchId !== null) return;
-  if (_ccGpsNegado && !forcar) return;
-  if (typeof S !== "undefined" && S.viewAtual !== "atendente") return;
-  if (!navigator.geolocation) { _ccGpsErro = "Sem GPS neste aparelho"; return; }
-  _ccGpsNegado = false; _ccGpsErro = "";
-  _ccGpsWatchId = navigator.geolocation.watchPosition(
-    function (pos) {
-      if (!document.getElementById("cc-canvas") || (typeof S !== "undefined" && S.viewAtual !== "atendente")) {
-        navigator.geolocation.clearWatch(_ccGpsWatchId); _ccGpsWatchId = null; return; // saiu da aba: poupa bateria
-      }
-      _ccGpsPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      _ccGpsPrec = pos.coords.accuracy; _ccGpsTs = Date.now(); _ccGpsErro = "";
-      _ccGpsAtualizarMapa();
-    },
-    function (err) {
-      if (err && err.code === 1) { // permissão negada: para o watcher e mostra o motivo no próprio mapa
-        if (_ccGpsWatchId !== null) navigator.geolocation.clearWatch(_ccGpsWatchId);
-        _ccGpsWatchId = null; _ccGpsNegado = true;
-        _ccGpsErro = "GPS bloqueado — libere a localização deste site nos Ajustes do navegador e toque em Ativar GPS";
-      } else { _ccGpsErro = "Sem sinal de GPS no momento — procurando…"; } // timeout/indisponível: o watch continua
-      const st = document.getElementById("cc-gps-status"); if (st) st.textContent = _ccGpsStatusTxt();
-      const bt = document.getElementById("cc-gps-btn"); if (bt) bt.style.display = _ccGpsNegado ? "" : "none";
-    },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
-  );
-}
-function _ccFilaOrdenar(dist) {
-  const d = n => (dist[n] != null ? dist[n] : 1e12);
-  const arr = _ccFilaIds.slice().sort((a, b) => d(a) - d(b) || a - b);
-  const c = _ccFilaCabeca;
-  // histerese: a cabeça só troca se a outra mesa estiver >3 m mais perto (evita o foco pular com o ruído do GPS)
-  if (c != null && arr.length > 1 && arr[0] !== c && arr.indexOf(c) >= 0 && dist[c] != null && dist[arr[0]] != null && dist[c] - dist[arr[0]] < 3) {
-    arr.splice(arr.indexOf(c), 1); arr.unshift(c);
-  }
-  return arr;
-}
-function _ccFilaHTML(fila, dist) {
-  if (!fila.length) return `<span class="cc-leg">✅ Nenhuma mesa aguardando atendimento</span>`;
-  return fila.map((n, i) => `<span class="cc-fi${i === 0 ? " prox" : ""}">${i === 0 ? "▶ " : ""}${String(n).padStart(2, "0")}${dist[n] != null ? " · " + _ccFmtDist(dist[n]) : ""}</span>`).join('<span class="cc-leg">›</span>');
-}
-function _ccGarcomHTML(fr) {
-  const pos = _ccGpsPosAtual();
-  if (!pos || !fr) return "";
-  const g = fr.toXY(pos), cl = v => Math.min(96, Math.max(4, v));
-  const fora = g.x < 2 || g.x > 98 || g.y < 2 || g.y > 98;
-  return `<div class="cc-cli cc-garcom" id="cc-garcom-ponto" style="left:${cl(g.x)}%;top:${cl(g.y)}%;color:#0ea5e9"><b style="background:#0ea5e9"></b><span>🔵 Você${fora ? " ↗ fora da área" : ""}</span></div>`;
-}
-// Atualização assíncrona no lugar (chamada a cada fix do GPS) — sem popup, sem reconstruir o mapa
-function _ccGpsAtualizarMapa() {
-  const cv = document.getElementById("cc-canvas");
-  if (!cv) return;
-  const st = document.getElementById("cc-gps-status"); if (st) st.textContent = _ccGpsStatusTxt();
-  const bt = document.getElementById("cc-gps-btn"); if (bt) bt.style.display = _ccGpsNegado ? "" : "none";
-  const pos = _ccGpsPosAtual(), fr = _ccMapaFrameAtual;
-  if (!pos || !fr) return;
-  // ponto azul
-  const html = _ccGarcomHTML(fr);
-  let dot = document.getElementById("cc-garcom-ponto");
-  if (!dot) cv.insertAdjacentHTML("beforeend", html);
-  else { const tmp = document.createElement("div"); tmp.innerHTML = html; const novo = tmp.firstChild; dot.style.left = novo.style.left; dot.style.top = novo.style.top; dot.querySelector("span").textContent = novo.querySelector("span").textContent; }
-  // distâncias reais (_ccDistM) mesa a mesa
-  const dist = {};
-  _ccMapaPts.forEach(o => { dist[o.p] = _ccDistM(pos, o.geo); });
-  const fila = _ccFilaOrdenar(dist);
-  if ((fila.length ? fila[0] : null) !== _ccFilaCabeca) { if (!_ccMapaArrastando) renderAtendente(); return; } // a cabeça da fila mudou: foco avança
-  cv.querySelectorAll(".cc-puck[data-mesa]").forEach(el => {
-    const n = Number(el.getAttribute("data-mesa")), d = dist[n];
-    const lg = el.querySelector(".cc-leg");
-    if (lg) { lg.textContent = d != null ? (el.classList.contains("estim") ? "≈" : "") + _ccFmtDist(d) : ""; lg.classList.toggle("alvo", d != null && d < 1.5); }
-    const idx = fila.indexOf(n); let ord = el.querySelector(".cc-ord");
-    if (idx >= 0) { if (!ord) { ord = document.createElement("i"); ord.className = "cc-ord"; el.insertBefore(ord, el.firstChild); } ord.textContent = idx + 1; }
-    else if (ord) ord.remove();
+function _ccPosicoes(nums) {
+  const L = _ccLayoutCfg(), pos = {}, ocup = new Set();
+  nums.forEach(n => {
+    const m = L.mesas[n];
+    if (m && Number.isInteger(m.x) && Number.isInteger(m.y) && m.x >= 0 && m.y >= 0 && m.x < 100 && m.y < 100 && !ocup.has(m.x + "," + m.y)) { pos[n] = { x: m.x, y: m.y }; ocup.add(m.x + "," + m.y); }
   });
-  const fe = document.getElementById("cc-fila"); if (fe) fe.innerHTML = _ccFilaHTML(fila, dist);
+  let maxX = -1; Object.keys(pos).forEach(n => { if (pos[n].x > maxX) maxX = pos[n].x; });
+  const cols = Math.max(maxX + 1, Math.min(10, Math.max(3, Math.ceil(Math.sqrt(nums.length * 1.5))))); // 10 mesas→4 col · 100 mesas→10 col
+  let i = 0;
+  nums.filter(n => !pos[n]).forEach(n => { for (;; i++) { const x = i % cols, y = Math.floor(i / cols); if (!ocup.has(x + "," + y)) { pos[n] = { x, y }; ocup.add(x + "," + y); i++; break; } } });
+  return pos;
+}
+function _ccEditarMaterializar() { // fixa as posições atuais (inclusive as automáticas) p/ não "andarem" durante a edição
+  const nums = _ccListaMesas(), pos = _ccPosicoes(nums), L = _ccLayoutCfg();
+  nums.forEach(n => { L.mesas[n] = Object.assign({}, L.mesas[n], { x: pos[n].x, y: pos[n].y }); });
+  _ccLayoutSalvar(L);
 }
 
 function _ccMontarMapaMesasHTML() {
-  _ccGpsGarcomIniciar(); // watchPosition contínuo em segundo plano (idempotente: nunca cria 2 watchers)
   if (config.mapaGeoOverride && typeof config.mapaGeoOverride === "object") mapaGeoOverride = config.mapaGeoOverride; // vem do config sincronizado
   const pad = n => String(n).padStart(2, "0");
-  const maxN = Math.max(config.numMesas || 20, ...Object.keys(mesaStatus).map(Number).filter(n => !isNaN(n)), 1);
-  // Toda mesa com coordenada salva (override do dono, mesaGeo ou calibração do admin) entra no mapa,
-  // inclusive número acima de config.numMesas — nenhuma mesa salva fica oculta.
-  const _calPos = n => { try { const c = ccCalibracaoMesas && ccCalibracaoMesas[n]; return (c && isFinite(c.lat) && isFinite(c.lng) && !(c.lat === 0 && c.lng === 0)) ? { lat: c.lat, lng: c.lng } : null; } catch (er) { return null; } };
-  const _nums = [];
-  for (let n = 1; n <= maxN; n++) _nums.push(n);
-  let _calKeys = []; try { _calKeys = Object.keys(ccCalibracaoMesas || {}); } catch (er) {}
-  [].concat(Object.keys(mapaGeoOverride || {}), Object.keys(mesaGeo || {}), _calKeys).map(Number).forEach(n => { if (n >= 1 && isFinite(n) && _nums.indexOf(n) < 0) _nums.push(n); });
-  _nums.sort((a, b) => a - b);
-  const grupos = [];
-  for (const n of _nums) {
-    const e = _ccEstadoGrupo(n);
-    const geo = e.g.map(m => _ccPosMesa(m) || _calPos(m)).find(Boolean) || null;
-    if (!(_ccMapaTodas || e.ativa || geo)) continue;
-    e.p = n; e.geo = geo;
-    e.estim = !geo && e.sinalN ? mesaGeoCliente[e.sinalN] : null; // sem GPS da mesa: usa onde o cliente clicou
-    grupos.push(e);
-  }
-  const comPos = grupos.filter(e => e.geo || e.estim);
-  const semPos = grupos.filter(e => !e.geo && !e.estim);
-  const fr = _ccMapaFrame(comPos.map(e => e.geo || e.estim));
-  _ccMapaFrameAtual = fr;
+  const ed = _ccEditMapa;
+  const nums = _ccListaMesas(), pos = _ccPosicoes(nums), LY = _ccLayoutCfg();
 
-  // distância real garçom→mesa (_ccDistM) + fila de atendimento: pedido novo / campainha / pronto, mais perto primeiro
-  const _gps = _ccGpsPosAtual();
-  _ccMapaPts = comPos.map(e => ({ p: e.p, geo: e.geo || e.estim }));
-  const _dist = {};
-  _ccMapaPts.forEach(o => { _dist[o.p] = _gps ? _ccDistM(_gps, o.geo) : null; });
-  _ccFilaIds = grupos.filter(e => e.novo || e.camp || e.pronto).map(e => e.p);
-  const fila = _ccFilaOrdenar(_dist);
-  const _cabAnt = _ccFilaCabeca, _cab = fila.length ? fila[0] : null;
-  if (_cab !== _cabAnt) {          // a cabeça da fila mudou (entrega concluída, pedido novo ou garçom andou >3 m)
-    _ccFilaCabeca = _cab;
-    if (_cab != null) _ccMapaSel = _cab;            // o foco/folha avança sozinho p/ a próxima mesa mais próxima
-    else if (_ccMapaSel === _cabAnt) _ccMapaSel = null;
-  }
+  // Estado de cada mesa vem SÓ de mesaStatus + pedidosCozinha (alimentados pelo canal realtime "mesas-<empresa>").
+  const est = {};
+  nums.forEach(n => { const e = _ccEstadoGrupo(n); e.p = n; e.geo = e.g.map(_ccPosMesa).find(Boolean) || null; est[n] = e; });
+  const lista = nums.map(n => est[n]);
 
-  // alertas + bip nos sinais novos
-  const alertas = grupos.filter(e => e.camp || e.novo).sort((a, b) => (b.camp ? 1 : 0) - (a.camp ? 1 : 0));
+  // zonas: texto livre definido pelos atendentes; cada aparelho escolhe a(s) sua(s)
+  const zonaDe = n => String((LY.mesas[n] && LY.mesas[n].z) || "").trim();
+  const zonas = Array.from(new Set(nums.map(zonaDe).filter(Boolean))).sort();
+  const minhas = _ccMinhasZonas.filter(z => zonas.includes(z));
+  const minha = n => !minhas.length || !zonaDe(n) || minhas.includes(zonaDe(n)); // mesa sem zona é de todos
+
+  // alertas + bip (só toca p/ alerta novo da MINHA zona)
+  const alertas = lista.filter(e => e.camp || e.novo).sort((a, b) => (b.camp ? 1 : 0) - (a.camp ? 1 : 0));
+  const alertasMeus = alertas.filter(e => minha(e.p));
   let novoSinal = false;
-  alertas.forEach(e => { const k = e.p + (e.camp ? ":c" : ":p"); if (!_ccMapaVistos[k]) { _ccMapaVistos[k] = 1; novoSinal = true; } });
+  alertas.forEach(e => { const k = e.p + (e.camp ? ":c" : ":p"); if (!_ccMapaVistos[k]) { _ccMapaVistos[k] = 1; if (minha(e.p)) novoSinal = true; } });
   Object.keys(_ccMapaVistos).forEach(k => { if (!alertas.some(e => e.p + (e.camp ? ":c" : ":p") === k)) delete _ccMapaVistos[k]; });
   if (novoSinal && !_ccMapaPrimeiro) _ccMapaBip();
   _ccMapaPrimeiro = false;
 
-  let pucks = "", marc = "", linhas = "";
-  const clamp = v => Math.min(96, Math.max(4, v));
-  comPos.forEach(e => {
-    const pt = fr.toXY(e.geo || e.estim);
-    const cls = e.camp ? "cc-p-campainha" : e.novo ? "cc-p-pedido" : e.pronto ? "cc-p-pronto" : e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
-    const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
-    const _oi = fila.indexOf(e.p), _d = _dist[e.p];
-    pucks += `<div class="cc-puck ${cls}${e.estim ? " estim" : ""}${_ccMapaSel === e.p ? " sel" : ""}" data-mesa="${e.p}" style="left:${clamp(pt.x)}%;top:${clamp(pt.y)}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot}${e.estim ? " (posição estimada pelo celular do cliente)" : ""}">${_oi >= 0 ? `<i class="cc-ord">${_oi + 1}</i>` : ""}${rot}<small class="cc-leg${_d != null && _d < 1.5 ? " alvo" : ""}">${_d != null ? (e.estim ? "≈" : "") + _ccFmtDist(_d) : ""}</small></div>`;
-    // marcador do sinal do celular (de onde partiu o clique)
-    if (e.sinalN && e.geo && (e.camp || e.peds.length)) {
-      const c = fr.toXY(mesaGeoCliente[e.sinalN]);
-      const fora = c.x < 2 || c.x > 98 || c.y < 2 || c.y > 98;
-      const cor = e.camp ? "#f59e0b" : e.novo ? "#dc2626" : "#0284c7";
-      const cx = clamp(c.x), cy = clamp(c.y);
-      linhas += `<line x1="${clamp(pt.x)}" y1="${clamp(pt.y)}" x2="${cx}" y2="${cy}" stroke="${cor}" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
-      marc += `<div class="cc-cli" style="left:${cx}%;top:${cy}%;color:${cor}"><b style="background:${cor}"></b><span>📡 Cliente Mesa ${pad(e.sinalN)}${fora ? " ↗ fora da área" : ""}</span></div>`;
-    }
-  });
-  semPos.forEach((e, i) => {
-    const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
-    const cls = e.camp ? "cc-p-campainha" : e.novo ? "cc-p-pedido" : e.pronto ? "cc-p-pronto" : e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
-    pucks += `<div class="cc-puck ${cls}${_ccMapaSel === e.p ? " sel" : ""}" style="left:${7 + (i % 10) * 9.5}%;top:${93 - Math.floor(i / 10) * 11}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot} — sem GPS">${rot}<small>sem GPS</small></div>`;
-  });
+  // cinza=livre · laranja=ocupada · vermelho piscante=pedido novo · verde=pronto · roxo=conta · amarelo piscante=campainha
+  const clsDe = e => e.camp ? "cc-p-campainha" : e.novo ? "cc-p-pedido" : e.pronto ? "cc-p-pronto" : e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
+  const glifoDe = c => c === "cc-p-pedido" ? "!" : c === "cc-p-campainha" ? "🔔" : c === "cc-p-pronto" ? "✓" : c === "cc-p-conta" ? "$" : "";
 
-  const chips = alertas.map(e => `<button class="cc-chip ${e.camp ? "campainha" : "pedido"}" onclick="ccMapaSelecionar(${e.p})">${e.camp ? "🔔" : "🔴"} Mesa ${e.g.map(pad).join("+")} — ${e.camp ? "CAMPAINHA" : "PEDIDO NOVO"}</button>`).join("");
+  // canvas se ajusta ao nº de mesas: limites vêm das posições (na edição sobra 1 linha/coluna p/ posicionar)
+  let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+  nums.forEach(n => { const q = pos[n]; if (q.x < minX) minX = q.x; if (q.y < minY) minY = q.y; if (q.x > maxX) maxX = q.x; if (q.y > maxY) maxY = q.y; });
+  if (!nums.length) { minX = 0; minY = 0; }
+  const x0 = ed ? 0 : minX, y0 = ed ? 0 : minY, x1 = maxX + (ed ? 1 : 0), y1 = maxY + (ed ? 1 : 0);
+  const cols = Math.max(x1 - x0 + 1, 0), rows = Math.max(y1 - y0 + 1, 0);
+  const at = {}; nums.forEach(n => { at[pos[n].x + "," + pos[n].y] = n; });
+  let cels = "";
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const n = at[x + "," + y];
+    if (n == null) { cels += ed ? `<div class="cc-cel vz ed" onclick="ccMapaCelula(${x},${y})"></div>` : `<div class="cc-cel vz"></div>`; continue; }
+    const e = est[n], cl = clsDe(e), z = zonaDe(n), g = glifoDe(cl);
+    const selecionada = ed ? _ccEdSel.indexOf(n) >= 0 : _ccMapaSel === n;
+    cels += `<div class="cc-cel"><div class="cc-puck ${cl}${selecionada ? " sel" : ""}${!ed && !minha(n) ? " fora" : ""}" data-mesa="${n}" onclick="ccMapaTocar(${n})" title="Mesa ${pad(n)}${z ? " — " + _ccEsc(z) : ""}">${pad(n)}${g ? `<em class="cc-g">${g}</em>` : ""}${e.peds.length > 1 ? `<i class="cc-ord">${e.peds.length}</i>` : ""}${z ? `<em class="cc-z">${_ccEsc(z.slice(0, 3).toUpperCase())}</em>` : ""}</div></div>`;
+  }
+  const emUso = lista.filter(e => clsDe(e) !== "cc-p-livre").length;
+  const mapaHTML = nums.length
+    ? `<div class="cc-grade" style="grid-template-columns:repeat(${cols},minmax(30px,1fr))">${cels}</div>`
+    : `<div style="text-align:center;padding:24px 10px;font-weight:800;font-size:.8rem;color:#8a6a12">Nenhuma mesa cadastrada.<br>Toque em ✏️ Editar mapa → ➕ Mesa (ou defina o nº de mesas no Admin).</div>`;
+
+  const chips = alertasMeus.map(e => `<button class="cc-chip ${e.camp ? "campainha" : "pedido"}" onclick="ccMapaSelecionar(${e.p})">${e.camp ? "🔔" : "🔴"} Mesa ${pad(e.p)} — ${e.camp ? "CAMPAINHA" : "PEDIDO NOVO"}</button>`).join("")
+    + (alertas.length > alertasMeus.length ? `<button class="cc-chip" style="background:#64748b" onclick="ccMapaZona('')">👀 +${alertas.length - alertasMeus.length} em outras zonas</button>` : "");
 
   // folha de detalhes/ações da mesa selecionada
   let folha = "";
-  const sel = grupos.find(e => e.p === _ccMapaSel);
+  const sel = ed ? null : lista.find(e => e.p === _ccMapaSel);
   if (sel) {
-    const rot = sel.g.map(pad).join(" + ");
+    const gm = _ccGrupoMesa(sel.p); // mesas do grupo (juntadas dividem UM QR/número)
+    const rot = gm.map(pad).join(" + ");
     const itens = sel.peds.map(x => (Array.isArray(x.itens) ? x.itens.map(i => `${i.q || i.qtd || 1}x ${_ccEsc(i.nome || i.produto || "")}`).join(", ") : "")).filter(Boolean).join(" · ");
-    const desde = sel.g.map(n => mesaSessaoInicio[n]).filter(Boolean)[0];
+    const desde = gm.map(n => mesaSessaoInicio[n]).filter(Boolean)[0];
     const _refs = sel.peds.map(x => String(x.obs || "")).map(o => (o.match(/📍 Local:\s*([^|]*)/) || [])[1]).filter(Boolean);
-    let gpsTxt = _refs.length ? `<p style="color:#0f2340;font-weight:800">📍 O cliente informou: "${_ccEsc(_refs.join(" / "))}" (sem GPS)</p>` : `<p style="color:#64748b">📍 Destino: Mesa ${rot} (posição no mapa acima).</p>`;
+    let gpsTxt = _refs.length ? `<p style="color:#0f2340;font-weight:800">📍 O cliente informou: "${_ccEsc(_refs.join(" / "))}"</p>` : "";
     if (sel.sinalN) {
       const posMesa = sel.geo, cli = mesaGeoCliente[sel.sinalN];
       const d = posMesa ? Math.round(_ccDistM(posMesa, cli)) : null;
-      gpsTxt = `<p>📡 Sinal do celular capturado no instante do ${_ccMesasSinalTipo[sel.sinalN] === "campainha" ? "toque da campainha" : "pedido"}${d != null ? ` — a <b>${d} m</b> da mesa armada.${d > 25 ? " ⚠️ Cliente longe da posição da mesa: ela pode ter sido movida." : ""}` : "."}</p>`;
+      gpsTxt = `<p>📡 Sinal do celular capturado no instante do ${_ccMesasSinalTipo[sel.sinalN] === "campainha" ? "toque da campainha" : "pedido"}${d != null ? ` — a <b>${d} m</b> da mesa armada.` : "."}</p>`;
     }
+    // múltiplos pedidos: conta junta (um total) ou separada (cada pedido cobrado à parte)
+    const nPed = sel.peds.length;
+    const soma = sel.peds.reduce((a, x) => a + (Number(x.total) || 0), 0);
+    const porNome = {};
+    sel.peds.forEach(x => { const k = String(x.nome || "").trim(); if (k) porNome[k] = (porNome[k] || 0) + (Number(x.total) || 0); });
+    const nomes = Object.keys(porNome);
+    const resumo = nPed ? `<p>🧾 <b>${nPed} pedido${nPed > 1 ? "s" : ""} em aberto</b> · conta junta: <b>${fmtBRL(soma)}</b>${nomes.length > 1 ? `<br>✂️ Por cliente: ${nomes.map(k => `${_ccEsc(k)} ${fmtBRL(porNome[k])}`).join(" · ")}` : ""}</p>` : "";
+    const idArg = x => JSON.stringify(String(x.id)).replace(/"/g, "&quot;");
+    const lin = nPed ? sel.peds.map(x => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid #e2e8f0;padding-top:6px"><span style="font-size:.72rem;color:#475569">${x.numero ? "#" + _ccEsc(x.numero) + " " : ""}<b>${_ccEsc(x.nome || "Pedido")}</b> · ${fmtBRL(Number(x.total) || 0)} · ${_ccEsc(x.status)}</span>${nPed > 1 ? `<button style="border:0;border-radius:10px;padding:6px 9px;font-size:.7rem;font-weight:800;color:#fff;background:#ea580c;white-space:nowrap" onclick="abrirMaquininha(${idArg(x)})">💳 Cobrar este</button>` : ""}</div>`).join("") : "";
+    const confirma = _ccLiberarConfirma === sel.p;
     const b = [];
     if (sel.cham) b.push(`<button class="k" onclick="ccConfirmarPagamentoSmartLink(${sel.p})">✅ Já passei o cartão</button>`);
     b.push(`<button class="m" onclick="ccAtendenteLancarPedidoMesa(${sel.p})">🍽️ Lançar pedido</button>`);
     if (sel.pronto || sel.peds.length) b.push(`<button class="e" onclick="ccMapaAcao('entregue',${sel.p})">✓ Marcar Entregue</button>`);
-    if (sel.conta || sel.pronto || sel.ativa) b.push(`<button class="c" onclick="abrirMaquininhaMesa(${sel.p})">💳 Cobrar</button>`);
+    if ((sel.conta || sel.pronto || sel.ativa) && nPed <= 1) b.push(`<button class="c" onclick="abrirMaquininhaMesa(${sel.p})">💳 Cobrar</button>`);
     if (sel.ativa) b.push(`<button class="r" onclick="ccCorrigirSessaoMesa(${sel.p})">🔄 Corrigir Sessão</button>`);
     if (sel.ativa && !sel.conta) b.push(`<button class="l" onclick="ccMapaAcao('conta',${sel.p})">💳 Pedir conta</button>`);
-    if (sel.ativa) b.push(`<button class="l" onclick="ccMapaAcao('livre',${sel.p})">🟢 Liberar</button>`);
-    if (sel.sinalN) {
-      b.push(`<button class="m" onclick="ccMapaPuxarParaCliente(${sel.p})">📌 Mesa está aqui (usar posição do cliente)</button>`);
-      b.push(`<button class="l" onclick="ccAbrirSinalClienteMesa(${sel.sinalN})">🗺️ Abrir no Maps</button>`);
-    }
-    if (mapaGeoOverride[sel.p]) b.push(`<button class="l" onclick="ccMapaLimparPos(${sel.p})">↺ Posição do GPS</button>`);
-    folha = `<div class="cc-folha"><h5>Mesa ${rot}${sel.total ? ` · ${fmtBRL(sel.total)}` : ""}${desde ? ` · <span class="cc-timer" data-inicio="${new Date(desde).toISOString()}" data-parado="0">⏱ 00:00</span>` : ""}</h5>
-      ${sel.peds.length ? `<p>👥 <b>${sel.peds.length} pedido(s) nesta mesa:</b><br>${sel.peds.map(x => `${x.numero ? "#" + _ccEsc(x.numero) + " " : ""}${x.nome ? _ccEsc(x.nome) + " " : ""}· ${fmtBRL(Number(x.total) || 0)} · ${_ccEsc(x.status)}`).join("<br>")}</p>` : ""}${itens ? `<p>🍽️ ${itens}</p>` : ""}${gpsTxt}<div class="cc-btns">${b.join("")}</div></div>`;
+    if (sel.ativa) b.push(confirma ? `<button class="k" onclick="ccMapaLiberar(${sel.p})">⚠️ Encerrar ${fmtBRL(soma)} SEM cobrança — toque de novo</button>` : `<button class="l" onclick="ccMapaLiberar(${sel.p})">🟢 Liberar</button>`);
+    if (sel.sinalN) b.push(`<button class="l" onclick="ccAbrirSinalClienteMesa(${sel.sinalN})">🗺️ Abrir no Maps</button>`);
+    const aviso = (sel.ativa && nPed) ? `<p style="color:#7c3aed;font-weight:700">💳 ${nPed > 1 ? "Cobre cada pedido (conta separada) ou na sequência (conta junta): a mesa só volta para cinza quando o último for pago." : "Ao confirmar o pagamento em Cobrar, a mesa volta para cinza (livre) em todas as telas."}</p>` : "";
+    folha = `<div class="cc-folha"><h5>Mesa ${rot}${soma ? ` · ${fmtBRL(soma)}` : ""}${zonaDe(sel.p) ? ` · ${_ccEsc(zonaDe(sel.p))}` : ""}${desde ? ` · <span class="cc-timer" data-inicio="${new Date(desde).toISOString()}" data-parado="0">⏱ 00:00</span>` : ""}</h5>
+      ${resumo}${lin}${itens ? `<p>🍽️ ${itens}</p>` : ""}${gpsTxt}${aviso}<div class="cc-btns">${b.join("")}</div></div>`;
   }
+
+  const zonaBar = zonas.length ? `<div class="cc-tb"><span class="cc-leg">Minha zona:</span><button class="${minhas.length ? "" : "on"}" onclick="ccMapaZona('')">Todas</button>${zonas.map(z => `<button class="${minhas.indexOf(z) >= 0 ? "on" : ""}" onclick="ccMapaZona(${JSON.stringify(z).replace(/"/g, "&quot;")})">${_ccEsc(z)}</button>`).join("")}</div>` : "";
+  const edBar = ed ? `<div class="cc-edbar"><b style="font-size:.75rem;color:#0c4a6e">✏️ Editando o mapa</b>
+      <span class="cc-leg" style="flex-basis:100%">Toque nas mesas p/ selecionar. Com 1 selecionada, toque numa célula tracejada p/ mover.</span>
+      <input id="cc-ed-zona" placeholder="Zona (ex: Praia – Fila 1)" value="${_ccEsc(_ccEdZonaTxt)}" oninput="_ccEdZonaTxt=this.value">
+      <button onclick="ccMapaAplicarZona()">Aplicar zona (${_ccEdSel.length})</button>
+      <button onclick="ccMapaAddMesa()">➕ Mesa</button>
+      <button onclick="ccMapaRemoverSel()">🗑 Remover (${_ccEdSel.length})</button>
+      <button onclick="ccMapaReorganizar()">↺ Reorganizar</button>
+      <button style="background:#16a34a" onclick="ccMapaEditar()">✓ Concluir</button></div>` : "";
 
   return `
     <div class="cc-tb">
-      <button class="${_ccMapaMover ? "on" : ""}" onclick="ccMapaToggle('mover')">✋ Mover mesas: ${_ccMapaMover ? "LIGADO" : "desligado"}</button>
-      <button class="${_ccMapaTodas ? "on" : ""}" onclick="ccMapaToggle('todas')">👁 ${_ccMapaTodas ? "Todas as mesas" : "Só mesas ativas"}</button>
-      <button onclick="ccMapaResetTudo()">↺ Voltar posições do GPS</button>
-      <span class="cc-leg">🔴 pedido novo · 🟡 campainha · 🟢 pronto · 🟣 conta · 🟠 ocupada · 📡 celular do cliente · 🔵 você</span>
-      <button id="cc-gps-btn" onclick="_ccGpsGarcomIniciar(true)" style="display:${_ccGpsNegado ? "" : "none"}">📡 Ativar GPS</button>
-      <span class="cc-leg" id="cc-gps-status">${_ccGpsStatusTxt()}</span>
+      <span class="cc-lg"><i style="background:#e5e7eb"></i>Livre</span>
+      <span class="cc-lg"><i style="background:#fb923c"></i>Ocupada</span>
+      <span class="cc-lg"><i style="background:#ef4444"></i>Pedido novo</span>
+      <span class="cc-lg"><i style="background:#22c55e"></i>Pronto</span>
+      <span class="cc-lg"><i style="background:#8b5cf6"></i>Conta</span>
+      <span class="cc-lg"><i style="background:#facc15"></i>Campainha</span>
+      <span class="cc-leg">${nums.length} mesas · ${emUso} em uso</span>
+      ${ed ? "" : `<button onclick="ccMapaEditar()">✏️ Editar mapa</button>`}
     </div>
-    <div class="cc-fila" id="cc-fila">${_ccFilaHTML(fila, _dist)}</div>
-    ${chips ? `<div class="cc-alertas">${chips}</div>` : ""}
-    <div class="cc-canvas${_ccMapaMover ? " mover" : ""}" id="cc-canvas">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none">${linhas}</svg>
-      <div class="cc-norte">N ↑</div>
-      <div class="cc-escala"><i style="width:${fr.barra10m}%;min-width:20px"></i>10 m</div>
-      ${marc}${_ccGarcomHTML(fr)}${pucks}
-      ${grupos.length ? "" : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8a6a12;font-weight:800;font-size:.8rem;text-align:center;padding:20px">Nenhuma mesa armada ainda.<br>As mesas aparecem aqui quando o cliente escaneia o QR.</div>`}
-    </div>
+    ${edBar}${ed ? "" : zonaBar}
+    ${chips && !ed ? `<div class="cc-alertas">${chips}</div>` : ""}
+    <div class="cc-fx" id="cc-canvas">${mapaHTML}</div>
     ${folha}`;
 }
 
@@ -6575,6 +6525,85 @@ function ccMapaPD(ev, n) {
   el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
 }
 function ccMapaSelecionar(n) { _ccMapaSel = n; renderAtendente(); }
+function ccMapaTocar(n) {
+  if (_ccEditMapa) { const i = _ccEdSel.indexOf(n); if (i >= 0) _ccEdSel.splice(i, 1); else _ccEdSel.push(n); renderAtendente(); return; }
+  _ccLiberarConfirma = null;
+  _ccMapaSel = (_ccMapaSel === n ? null : n);
+  renderAtendente();
+  const f = document.querySelector("#at-mesas-grid .cc-folha");
+  if (f && f.scrollIntoView) f.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function ccMapaZona(z) {
+  if (!z) _ccMinhasZonas = [];
+  else { const i = _ccMinhasZonas.indexOf(z); if (i >= 0) _ccMinhasZonas.splice(i, 1); else _ccMinhasZonas.push(z); }
+  try { localStorage.setItem("cc_minhasZonas", JSON.stringify(_ccMinhasZonas)); } catch (e) {}
+  renderAtendente();
+}
+function ccMapaEditar() {
+  _ccEditMapa = !_ccEditMapa; _ccEdSel = []; _ccMapaSel = null; _ccLiberarConfirma = null;
+  if (_ccEditMapa) _ccEditarMaterializar();
+  renderAtendente();
+}
+function ccMapaCelula(x, y) {
+  if (!_ccEditMapa) return;
+  if (_ccEdSel.length !== 1) { if (typeof toast === "function") toast("Selecione UMA mesa e toque na célula vazia."); return; }
+  const L = _ccLayoutCfg(), n = _ccEdSel[0];
+  L.mesas[n] = Object.assign({}, L.mesas[n], { x, y });
+  _ccLayoutSalvar(L); _ccEdSel = []; renderAtendente();
+}
+function ccMapaAplicarZona() {
+  if (!_ccEdSel.length) { if (typeof toast === "function") toast("Selecione as mesas da zona primeiro."); return; }
+  const z = String(_ccEdZonaTxt || "").trim(), L = _ccLayoutCfg();
+  _ccEdSel.forEach(n => { const m = Object.assign({}, L.mesas[n]); if (z) m.z = z; else delete m.z; L.mesas[n] = m; });
+  _ccLayoutSalvar(L); _ccEdSel = []; renderAtendente();
+}
+function ccMapaAddMesa() {
+  const n = parseInt(prompt("Número da nova mesa (o mesmo do QR Code):"), 10);
+  if (!n || n < 1) return;
+  if (_ccListaMesas().indexOf(n) >= 0) { if (typeof toast === "function") toast("A mesa " + n + " já está no mapa."); return; }
+  const L = _ccLayoutCfg();
+  L.ocultas = L.ocultas.filter(m => m !== n);
+  L.mesas[n] = Object.assign({}, L.mesas[n]); // sem x,y: cai na 1ª célula livre e é fixada abaixo
+  _ccLayoutSalvar(L);
+  if ((parseInt(config.numMesas, 10) || 0) < n) { config.numMesas = n; salvar("config", config); if (typeof popularMesaSelect === "function") popularMesaSelect(); }
+  _ccEditarMaterializar(); renderAtendente();
+}
+function ccMapaRemoverSel() {
+  const L = _ccLayoutCfg(), total = parseInt(config.numMesas, 10) || 0; let barradas = 0;
+  _ccEdSel.forEach(n => {
+    const e = _ccEstadoGrupo(n);
+    if (e.ativa || e.camp) { barradas++; return; } // mesa em uso não sai do mapa
+    delete L.mesas[n];
+    if (n <= total && L.ocultas.indexOf(n) < 0) L.ocultas.push(n);
+  });
+  _ccLayoutSalvar(L); _ccEdSel = [];
+  if (barradas && typeof toast === "function") toast(barradas + " mesa(s) em uso não podem ser removidas.");
+  renderAtendente();
+}
+function ccMapaReorganizar() {
+  if (!confirm("Reorganizar as posições automaticamente? As zonas são mantidas.")) return;
+  const L = _ccLayoutCfg();
+  Object.keys(L.mesas).forEach(n => { const z = L.mesas[n] && L.mesas[n].z; L.mesas[n] = z ? { z } : {}; });
+  _ccLayoutSalvar(L); _ccEditarMaterializar(); _ccEdSel = []; renderAtendente();
+}
+// 🟢 Liberar: zera a mesa na nuvem (status livre, total 0) e ela volta a cinza em todas as telas pelo canal realtime.
+// Com pedido em aberto pede 2º toque e encerra os pedidos SEM lançar cobrança (marcados p/ auditoria).
+function ccMapaLiberar(p) {
+  const e = _ccEstadoGrupo(p);
+  if (e.peds.length && _ccLiberarConfirma !== p) { _ccLiberarConfirma = p; renderAtendente(); return; }
+  _ccLiberarConfirma = null;
+  if (e.peds.length) {
+    const agora = new Date().toISOString();
+    e.peds.forEach(x => { x.status = "entregue"; if (!x.entregueEm) x.entregueEm = agora; x.encerradoSemCobranca = true; });
+    salvar("pedidosCozinha_v1", pedidosCozinha);
+  }
+  _ccMesasChamandoGarcom.delete(p); delete _ccMesasChamandoGarcomTotal[p];
+  ccSetMesaStatus(p, "livre", 0);
+  _ccMapaSel = null;
+  renderAtendente();
+  if (typeof renderCozinha === "function") renderCozinha();
+  if (typeof toast === "function") toast("🟢 Mesa " + String(p).padStart(2, "0") + " liberada");
+}
 function ccMapaToggle(w) { if (w === "mover") _ccMapaMover = !_ccMapaMover; else _ccMapaTodas = !_ccMapaTodas; renderAtendente(); }
 function ccMapaResetTudo() {
   if (!confirm("Voltar todas as mesas para a posição capturada pelo GPS (desfaz as posições arrastadas)?")) return;
