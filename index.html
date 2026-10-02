@@ -13775,7 +13775,12 @@ function _injetarPainelCalibracaoMesas(hostId) {
       <button id="cal-mesa-btn" class="btn-primary px-4 py-2.5 text-xs" onclick="ccCalibrarPosicaoMesa()">📍 Salvar Posição Aqui</button>
       <button class="btn-ghost px-4 py-2.5 text-xs" onclick="ccEscanearQRMesaCalibracao()">📷 Escanear QR da Mesa</button>
     </div>
-    <div id="cal-mesa-lista" style="margin-top:14px"></div>`;
+    <div id="cal-mesa-lista" style="margin-top:14px"></div>
+    ${hostId ? "" : `<div style="margin-top:16px;padding:12px;border:2px dashed #dc2626;border-radius:12px;background:#fef2f2">
+      <p class="text-xs font-bold" style="color:#991b1b;margin-bottom:8px">Ferramenta de testes — apaga TODAS as posições (latitude/longitude) das mesas na nuvem e em todos os aparelhos conectados.</p>
+      <button id="cal-zerar-nuvem-btn" onclick="ccZerarPosicoesNuvem()" style="width:100%;padding:12px;border:none;border-radius:10px;background:#dc2626;color:#fff;font-weight:900;font-size:.8rem;cursor:pointer">⚠️ ZERAR POSIÇÕES DA NUVEM</button>
+      <p id="cal-zerar-nuvem-msg" style="font-size:.7rem;margin-top:8px;color:#7f1d1d"></p>
+    </div>`}`;
   if (ancora && ancora.parentElement === adminEl) adminEl.insertBefore(panel, ancora.nextSibling);
   else adminEl.prepend(panel);
   _ccRenderListaCalibracao();
@@ -13801,6 +13806,7 @@ async function ccPublicarCalibracoesPendentes() {
     for (const n of nums) {
       const c = ccCalibracaoMesas[n];
       if (!c || !isFinite(c.lat) || !isFinite(c.lng) || (c.lat === 0 && c.lng === 0)) continue;
+      if (config.posicoesResetEm && (Number(c.ts) || 0) <= config.posicoesResetEm) { delete ccCalibracaoMesas[n]; _ccSalvarCalibracaoMesas(); continue; } // anterior ao reset
       mesaGeo[Number(n)] = { lat: c.lat, lng: c.lng };
       await ccGravarGeoMesa(n, c.lat, c.lng);
     }
@@ -13815,6 +13821,83 @@ document.addEventListener("DOMContentLoaded", function () { setTimeout(ccPublica
 // Os nomes abaixo ficam só como compatibilidade: apenas focam a mesa no mapa, nunca abrem janela.
 function ccAbrirRadarMesa(numero) { try { ccMapaSelecionar(Number(numero)); } catch (e) {} }
 function ccFecharRadarMesa() {}
+
+// ═══ RESET DE POSIÇÕES (ferramenta de testes) ═══════════════════════════════
+// Nuvem: tabela "mesas" -> latitude/longitude (e sinal do cliente) viram NULL só para a empresa ativa.
+// Usa UPDATE e não DELETE de propósito: apagar a linha também apagaria status/total da mesa (mesa ocupada
+// sumiria da operação) e o listener realtime ignora eventos DELETE. UPDATE=NULL dispara o evento normal.
+// Broadcast: canal "cc-reset-<empresa>" avisa todos os aparelhos online no mesmo instante.
+let _ccCanalReset = null, _ccCanalResetProm = null, _ccCanalResetEmp = null;
+function ccLimparPosicoesLocal() {
+  [ccCalibracaoMesas, mesaGeo, mesaGeoCliente, mapaGeoOverride, _ccMesasSinalTipo].forEach(function (o) {
+    try { Object.keys(o).forEach(function (k) { delete o[k]; }); } catch (e) {}
+  });
+  try { _ccSalvarCalibracaoMesas(); } catch (e) {}
+  try { _ccSalvarPosicoesMapa(); } catch (e) {}
+  try { _ccMapaSel = null; } catch (e) {}
+  try { // fila offline: descarta gravações de posição que ainda não subiram (senão ressuscitam no reenvio)
+    ccSalvarFilaOffline(ccLerFilaOffline().filter(function (i) { return !(i.tipo === "mesas" && i.dados && (i.dados.latitude != null || i.dados.longitude != null)); }));
+  } catch (e) {}
+  try { if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente(); } catch (e) {}
+  try { _ccRenderListaCalibracao(); } catch (e) {}
+}
+function ccAplicarResetRecebido(PayloadTempoReal) {
+  try {
+    if (!PayloadTempoReal || PayloadTempoReal.emp !== window.COOKCONTROL_EMPRESA_ID_ATIVA) return;
+    config.posicoesResetEm = PayloadTempoReal.ts; // marca: calibrações antigas deste aparelho não são republicadas
+    ccLimparPosicoesLocal();
+    if (typeof toast === "function") toast("📍 Posições das mesas zeradas pelo administrador.");
+  } catch (e) { console.warn("[Reset posições] aplicar:", e && e.message); }
+}
+function _ccCanalResetObter(emp) {
+  if (_ccCanalResetProm && _ccCanalResetEmp === emp) return _ccCanalResetProm;
+  _ccCanalResetEmp = emp;
+  _ccCanalResetProm = new Promise(function (res) {
+    try {
+      const ch = ccGetSupabaseClient().channel("cc-reset-" + emp, { config: { broadcast: { self: false } } });
+      ch.on("broadcast", { event: "zerar_posicoes" }, function (m) { ccAplicarResetRecebido(m && m.payload); });
+      _ccCanalReset = ch;
+      ch.subscribe(function (st) {
+        if (st === "SUBSCRIBED") res(true);
+        else if (st === "CHANNEL_ERROR" || st === "TIMED_OUT" || st === "CLOSED") { _ccCanalResetProm = null; res(false); }
+      });
+      setTimeout(function () { res(false); }, 6000);
+    } catch (e) { _ccCanalResetProm = null; res(false); }
+  });
+  return _ccCanalResetProm;
+}
+document.addEventListener("DOMContentLoaded", function () {
+  setTimeout(function () { // todo aparelho de equipe escuta o canal de reset desde o boot
+    try { if (window.COOKCONTROL_EMPRESA_ID_ATIVA && !(typeof ccEhAcessoCliente === "function" && ccEhAcessoCliente())) _ccCanalResetObter(window.COOKCONTROL_EMPRESA_ID_ATIVA); } catch (e) {}
+  }, 1200);
+});
+async function ccZerarPosicoesNuvem() {
+  const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+  const btn = document.getElementById("cal-zerar-nuvem-btn"), msg = document.getElementById("cal-zerar-nuvem-msg");
+  const say = function (t) { if (msg) msg.textContent = t; try { toast(t); } catch (e) {} };
+  if (!emp) { say("⚠️ Dispositivo sem empresa ativa — leia o QR do gerente antes."); return; }
+  if (!navigator.onLine) { say("⚠️ Sem internet: nada foi apagado."); return; }
+  if (!confirm("Apagar TODAS as posições das mesas na nuvem e em todos os celulares conectados?\n\nStatus e pedidos das mesas NÃO são apagados.")) return;
+  if ((prompt('Para confirmar, digite ZERAR') || "").trim().toUpperCase() !== "ZERAR") { say("Cancelado."); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ Apagando na nuvem…"; }
+  try {
+    const sb = ccGetSupabaseClient();
+    let r = await sb.from("mesas").update({ latitude: null, longitude: null, gps_cliente_lat: null, gps_cliente_lng: null, sinal_tipo: null }).eq("empresa_id", emp).select("numero");
+    if (r.error) r = await sb.from("mesas").update({ latitude: null, longitude: null }).eq("empresa_id", emp).select("numero"); // banco sem as colunas novas
+    if (r.error) throw new Error(r.error.message || "falha no Supabase");
+    const n = Array.isArray(r.data) ? r.data.length : 0;
+    const PayloadTempoReal = { emp: emp, ts: Date.now(), origem: "admin" };
+    config.posicoesResetEm = PayloadTempoReal.ts;
+    ccLimparPosicoesLocal(); // zera ccCalibracaoMesas, mesaGeo, mesaGeoCliente e ajustes do dono neste aparelho
+    const ok = await _ccCanalResetObter(emp);
+    if (ok && _ccCanalReset) await _ccCanalReset.send({ type: "broadcast", event: "zerar_posicoes", payload: PayloadTempoReal });
+    say("✅ " + n + " mesa(s) zerada(s) na nuvem." + (ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
+  } catch (e) {
+    say("❌ Nada foi alterado: " + (e && e.message ? e.message : e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⚠️ ZERAR POSIÇÕES DA NUVEM"; }
+  }
+}
 
 // ─── SINAL DE CONFIRMAÇÃO COMBINADO (Mesa fixa + GPS vivo do celular) ──
 // Módulo isolado — NÃO altera ccCapturarGeoMesa()/ccGravarGeoMesa() (a
