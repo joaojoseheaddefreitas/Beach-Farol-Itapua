@@ -6284,6 +6284,12 @@ function _ccInjetarEstiloMapaMesas() {
     display:flex;align-items:center;justify-content:center;flex-direction:column;font-weight:900;font-size:.85rem;line-height:1;color:#0f2340;box-shadow:0 3px 8px rgba(0,0,0,.3);cursor:pointer;touch-action:none;user-select:none;z-index:3}
   .cc-puck small{font-size:.5rem;font-weight:800;margin-top:2px}
   .cc-puck.estim{border-style:dashed}
+  .cc-puck.s{min-width:36px;height:36px;padding:0 4px;border-radius:18px;font-size:.72rem;border-width:2px}
+  .cc-puck.s small{font-size:.45rem;margin-top:1px}
+  .cc-puck.xs{min-width:30px;height:30px;padding:0 3px;border-radius:15px;font-size:.66rem;border-width:2px}
+  .cc-puck.xs small{display:none}
+  .cc-puck.xs.sel small{display:block;position:absolute;top:100%;left:50%;transform:translateX(-50%);background:#0f2340;color:#fff;padding:1px 5px;border-radius:6px;font-size:.55rem;white-space:nowrap}
+  .cc-canvas.g{aspect-ratio:3/4;max-height:none}
   .cc-puck.sel{outline:4px solid #0ea5e9;z-index:5}
   .cc-p-livre{opacity:.75}.cc-p-ocupada{border-color:#ea580c;background:#fff7ed}.cc-p-pronto{border-color:#16a34a;background:#dcfce7}.cc-p-conta{border-color:#7c3aed;background:#ede9fe}
   .cc-p-pedido{border-color:#dc2626;animation:ccBlinkRed .8s infinite}.cc-p-campainha{border-color:#f59e0b;animation:ccBlinkYellow .8s infinite}
@@ -6439,9 +6445,30 @@ function _ccMapaBip() {
 // flutuante, ordem da fila) — sem reconstruir a tela e sem abrir janela.
 function _ccFmtDist(d) {
   if (d == null) return "";
-  if (d < 1.5) return "NO ALVO";
+  const u = Math.max(_ccGpsPrec || 0, 5); // incerteza real do GPS: abaixo dela a metragem não é confiável
+  if (d < u) return (d < 1.5 && (_ccGpsPrec || 0) <= 5) ? "NO ALVO" : "perto";
   if (d >= 1000) return (d / 1000).toFixed(1) + "km";
-  return Math.round(d) + "m";
+  return "~" + (Math.round(d / 5) * 5) + "m";
+}
+// Afasta pucks sobrepostos (mapa de 80 mesas): relaxamento em pixels, com mola de volta à posição real.
+function _ccDesempilhar(its, wPx, hPx, d) {
+  const P = its.map(i => ({ p: i.p, ox: i.x * wPx / 100, oy: i.y * hPx / 100, x: i.x * wPx / 100, y: i.y * hPx / 100 }));
+  const m = d / 2 + 4;
+  for (let it = 0; it < 400; it++) {
+    for (let a = 0; a < P.length; a++) for (let b = a + 1; b < P.length; b++) {
+      let dx = P[b].x - P[a].x, dy = P[b].y - P[a].y, L = Math.hypot(dx, dy);
+      if (L >= d) continue;
+      if (L < 0.01) { const t = (a + b + 1) * 2.4; dx = Math.cos(t); dy = Math.sin(t); L = 1; }
+      const f = (d - L) / 2 / L;
+      P[a].x -= dx * f; P[a].y -= dy * f; P[b].x += dx * f; P[b].y += dy * f;
+    }
+    P.forEach(q => {
+      q.x += (q.ox - q.x) * 0.005; q.y += (q.oy - q.y) * 0.005;
+      q.x = Math.min(wPx - m, Math.max(m, q.x)); q.y = Math.min(hPx - m, Math.max(m, q.y));
+    });
+  }
+  const out = {}; P.forEach(q => { out[q.p] = { x: q.x / wPx * 100, y: q.y / hPx * 100 }; });
+  return out;
 }
 function _ccGpsPosAtual() { return (_ccGpsPos && (Date.now() - _ccGpsTs) < 60000) ? _ccGpsPos : null; } // fix velho (>60s) não vale
 function _ccGpsStatusTxt() {
@@ -6584,12 +6611,17 @@ function _ccMontarMapaMesasHTML() {
 
   let pucks = "", marc = "", linhas = "";
   const clamp = v => Math.min(96, Math.max(4, v));
+  const _nP = comPos.length, _grande = _nP > 30;
+  const _tam = _nP <= 12 ? "" : _nP <= 30 ? " s" : " xs", _dPx = _nP <= 12 ? 50 : _nP <= 30 ? 40 : 33;
+  const _cvEl = document.getElementById("cc-canvas");
+  const _wPx = (_cvEl && _cvEl.offsetWidth) || Math.min((window.innerWidth || 380) - 24, 700), _hPx = _wPx * (_grande ? 4 / 3 : 0.75);
+  const _desl = _ccDesempilhar(comPos.map(e => { const q = fr.toXY(e.geo || e.estim); return { p: e.p, x: clamp(q.x), y: clamp(q.y) }; }), _wPx, _hPx, _dPx);
   comPos.forEach(e => {
-    const pt = fr.toXY(e.geo || e.estim);
+    const pt = _desl[e.p] || fr.toXY(e.geo || e.estim);
     const cls = _ccPuckCls(e);
     const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
     const _oi = fila.indexOf(e.p), _d = _dist[e.p];
-    pucks += `<div class="cc-puck ${cls}${e.estim ? " estim" : ""}${_ccMapaSel === e.p ? " sel" : ""}" data-mesa="${e.p}" style="left:${clamp(pt.x)}%;top:${clamp(pt.y)}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot}${e.estim ? " (posição estimada pelo celular do cliente)" : ""}">${_oi >= 0 ? `<i class="cc-ord">${_oi + 1}</i>` : ""}${rot}<small class="cc-leg${_d != null && _d < 1.5 ? " alvo" : ""}">${_d != null ? (e.estim ? "≈" : "") + _ccFmtDist(_d) : ""}</small></div>`;
+    pucks += `<div class="cc-puck${_tam} ${cls}${e.estim ? " estim" : ""}${_ccMapaSel === e.p ? " sel" : ""}" data-mesa="${e.p}" style="left:${clamp(pt.x)}%;top:${clamp(pt.y)}%" onpointerdown="ccMapaPD(event,${e.p})" title="Mesa ${rot}${e.estim ? " (posição estimada pelo celular do cliente)" : ""}">${_oi >= 0 ? `<i class="cc-ord">${_oi + 1}</i>` : ""}${rot}<small class="cc-leg${_d != null && _d < 1.5 ? " alvo" : ""}">${_d != null ? (e.estim ? "≈" : "") + _ccFmtDist(_d) : ""}</small></div>`;
     // marcador do sinal do celular (de onde partiu o clique)
     if (e.sinalN && e.geo && (e.camp || e.peds.length)) {
       const c = fr.toXY(mesaGeoCliente[e.sinalN]);
@@ -6651,10 +6683,10 @@ function _ccMontarMapaMesasHTML() {
     </div>
     <div class="cc-fila" id="cc-fila">${_ccFilaHTML(fila, _dist)}</div>
     ${chips ? `<div class="cc-alertas">${chips}</div>` : ""}
-    <div class="cc-canvas${_ccMapaMover ? " mover" : ""}" id="cc-canvas">
+    <div class="cc-canvas${_grande ? " g" : ""}${_ccMapaMover ? " mover" : ""}" id="cc-canvas">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none">${linhas}</svg>
       <div class="cc-norte">N ↑</div>
-      <div class="cc-escala"><i style="width:${fr.barra10m}%;min-width:20px"></i>10 m</div>
+      <div class="cc-escala"><i style="width:${fr.barra10m}%;min-width:6px"></i>10 m</div>
       ${marc}${_ccGarcomHTML(fr)}${pucks}
       ${comPos.length ? "" : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8a6a12;font-weight:800;font-size:.8rem;text-align:center;padding:20px">Nenhuma mesa posicionada ainda.<br>Escaneie o QR de cada mesa (📷 Calibrar mesas) e ela surge aqui na posição real.</div>`}
     </div>
