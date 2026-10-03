@@ -1296,7 +1296,7 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
   <div style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;background:#0f2340;color:#fff;flex:0 0 auto">
     <strong style="font-size:1.1rem">📍 Onde estão as mesas agora</strong>
     <div style="display:flex;gap:14px;font-size:.85rem;flex-wrap:wrap">
-      <span>🟢 Livre</span><span>🟡 Ocupada</span><span>🔵 Pedido feito</span>
+      <span>🟢 Livre</span><span>🟠 Ocupada</span><span>🔴 Pedindo conta</span>
     </div>
   </div>
   <div id="cc-totem-mapa" style="flex:1 1 auto;width:100%"></div>
@@ -2945,30 +2945,39 @@ async function ccClientePagarPix() {
   const cfg = window.COOKCONTROL_CONFIG || {};
   const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
   const statusEl = document.getElementById("cc-cliente-pix-status");
+  const btn = document.getElementById("cc-cliente-pagar-btn");
   const mesa = (typeof S !== "undefined" && S.mesa) || localStorage.getItem(CC_MESA_CLIENTE_KEY);
 
   if (!mesa) { toast("⚠️ Leia o QR Code da mesa antes de pagar."); return; }
   if (!empresaId) { if (statusEl) statusEl.textContent = "⚠️ Estabelecimento não ativado."; return; }
-  if (typeof S === "undefined" || !S.cart || !Object.keys(S.cart).length) {
-    toast("⚠️ Seu carrinho está vazio."); return;
-  }
+  const numeroMesa = Number(mesa);
+  if (!numeroMesa || !isFinite(numeroMesa)) { toast("⚠️ Mesa inválida."); return; }
 
-  const itensPedido = Object.entries(S.cart).map(([id, q]) => {
-    const it = (typeof getItem === "function") ? getItem(id) : null;
-    return it ? { nome: it.nome, quantidade: q, preco: (typeof _itemPreco==="function"?_itemPreco(it):it.preco) || 0 } : null;
-  }).filter(Boolean);
-  const valorTotal = itensPedido.reduce((s, i) => s + i.preco * i.quantidade, 0);
-  const orderId = `cliente-mesa${mesa}-${Date.now()}`;
-
-  if (statusEl) statusEl.textContent = "⏳ Gerando Pix...";
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = "⏳ Consultando o saldo da mesa...";
 
   try {
+    // O valor do Pix é o SALDO DEVEDOR REAL da mesa gravado no Supabase — nunca o carrinho do celular.
+    const sb = ccGetSupabaseClient();
+    const rs = await sb.from("mesas").select("total").eq("empresa_id", empresaId).eq("numero", numeroMesa).maybeSingle();
+    if (!rs || rs.error) throw new Error((rs && rs.error && rs.error.message) || "não foi possível ler o saldo da mesa");
+    const valorTotal = Math.round((Number(rs.data && rs.data.total) || 0) * 100) / 100;
+    if (!(valorTotal > 0)) {
+      if (statusEl) statusEl.textContent = "⚠️ Esta mesa não tem saldo a pagar. Se acabou de pedir, aguarde alguns segundos ou chame o garçom.";
+      return;
+    }
+
+    if (statusEl) statusEl.textContent = "⏳ Gerando Pix de " + fmtBRL(valorTotal) + "...";
+    const orderId = `cliente-mesa${numeroMesa}-${Date.now()}`;
     const resp = await fetch(`${cfg.paymentsApiBase}/payments/process`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-empresa-id": empresaId },
       body: JSON.stringify({
         provider: "mercadopago", serialNumber: "cliente-autoatendimento", tipoPagamento: "pix",
-        orderData: { orderId, numeroMesa: mesa, valorTotal, itensPedido },
+        orderData: {
+          orderId, numeroMesa, valorTotal,
+          itensPedido: [{ nome: `Saldo da Mesa ${numeroMesa}`, quantidade: 1, preco: valorTotal }],
+        },
       }),
     });
     const data = await resp.json();
@@ -2978,16 +2987,19 @@ async function ccClientePagarPix() {
     }
     if (statusEl) {
       statusEl.innerHTML =
-        `<img src="data:image/png;base64,${data.pix.qrCodeBase64}" style="width:190px;height:190px;margin:8px auto"/>`
+        `<p style="font-weight:800;color:#0f2340">Total da mesa: ${fmtBRL(valorTotal)}</p>`
+        + `<img src="data:image/png;base64,${data.pix.qrCodeBase64}" style="width:190px;height:190px;margin:8px auto"/>`
         + `<p>Escaneia e paga — a tela libera sozinha assim que confirmar.</p>`;
     }
-    ccEscutarPagamentoCliente(orderId, empresaId, mesa);
+    ccEscutarPagamentoCliente(orderId, empresaId, numeroMesa, valorTotal);
   } catch (err) {
     if (statusEl) statusEl.textContent = "❌ Erro de conexão: " + err.message;
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
-function ccEscutarPagamentoCliente(orderId, empresaId, mesa) {
+function ccEscutarPagamentoCliente(orderId, empresaId, mesa, valorPago) {
   const sb = ccGetSupabaseClient();
   const canal = sb
     .channel(`cliente-pgto-${orderId}`)
@@ -2996,7 +3008,7 @@ function ccEscutarPagamentoCliente(orderId, empresaId, mesa) {
       { event: "UPDATE", schema: "public", table: "cobrancas_mesa", filter: `order_id=eq.${orderId}` },
       (payload) => {
         if (payload.new.status !== "pago_confirmado") return;
-        ccFecharContaCliente(mesa);
+        ccFecharContaCliente(mesa, valorPago);
         sb.removeChannel(canal);
       }
     )
@@ -3015,10 +3027,30 @@ function ccAbaterSaldoMesa(mesa) {
     if (emp && typeof ccAtualizarMesaSupabase === "function") ccAtualizarMesaSupabase(emp, n, st, saldo);
   } catch (e) { console.warn("[Saldo mesa]", e && e.message); }
 }
-function ccFecharContaCliente(mesa) {
+function ccFecharContaCliente(mesa, valorPago) {
+  // Só é chamada depois do webhook REAL (cobrancas_mesa = pago_confirmado).
   if (typeof S !== "undefined") { S.cart = {}; if (typeof salvar === "function") salvar("cart", S.cart); }
-  // Pagamento confirmado só abate o saldo: a mesa e a sessão do cliente continuam (ele pode seguir consumindo).
-  try { ccAbaterSaldoMesa(mesa); } catch (e) {}
+  const pago = Number(valorPago) || 0;
+  const n = Number(mesa), emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+  if (emp && n && pago > 0) {
+    // Abate do saldo da nuvem exatamente o valor confirmado pelo Mercado Pago (a mesa e a sessão continuam).
+    (async () => {
+      try {
+        const r = await ccGetSupabaseClient().from("mesas").select("total").eq("empresa_id", emp).eq("numero", n).maybeSingle();
+        if (!r || r.error) throw new Error((r && r.error && r.error.message) || "saldo indisponível");
+        const atual = Number(r.data && r.data.total) || 0;
+        const st = (mesaStatus[n] && mesaStatus[n] !== "livre") ? mesaStatus[n] : "ocupada";
+        await ccAtualizarMesaSupabase(emp, n, st, Math.max(0, Math.round((atual - pago) * 100) / 100));
+      } catch (e) { console.warn("[Saldo mesa]", e && e.message); }
+    })();
+    // Recibo local só existe porque o pagamento foi confirmado de verdade.
+    try {
+      const recibo = { mesa: n, total: pago, itens: ccContaAtualMesa(n).flatMap(l => l.itens || []), formaPagamento: "pix", data: new Date().toISOString() };
+      salvar("ultimoReciboCliente_" + n, recibo);
+      const meus = carregar("meusRecibosCliente", []); meus.unshift(recibo); salvar("meusRecibosCliente", meus.slice(0, 20));
+    } catch (e) {}
+  }
+  const ag = document.getElementById("cc-fechamento-aguardando"); if (ag) ag.classList.add("hidden");
 
   const tela = document.createElement("div");
   tela.style.cssText = "position:fixed;inset:0;background:#16a34a;color:#fff;z-index:99999;"
@@ -3148,7 +3180,9 @@ function _enviarPedidoComNumero(numeroPedido, nomeCliente) {
   if(typeof baixarEstoqueAutomatico==="function") baixarEstoqueAutomatico(registro.itens);
 
   // Marcar mesa como ocupada
-  ccSetMesaStatus(S.mesa, "ocupada");
+  // O saldo da mesa na nuvem acompanha o pedido (antes era sobrescrito com 0 a cada novo pedido).
+  const _saldoMesa = pedidosCozinha.filter(p => Number(p.mesa) === Number(S.mesa) && p.status !== "entregue").reduce((a, p) => a + (Number(p.total) || 0), 0) + (prePago ? 0 : tot);
+  ccSetMesaStatus(S.mesa, "ocupada", _saldoMesa);
 
   // Montar resumo
   let txt = `━━━━━━━━━━━━━━━━━━━━━━\n  ${config.nome}\n  ${config.local}\n━━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -6380,19 +6414,19 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-puck.ov-camp::after{content:"🔔"}.cc-puck.ov-novo::after{content:"🧾"}.cc-puck.ov-prep::after{content:"🍳"}.cc-puck.ov-pronto::after{content:"✅"}
   .cc-puck.ov-camp{animation:ccRingY 1s infinite}.cc-puck.ov-novo{animation:ccRingM .9s infinite}.cc-puck.ov-prep{animation:ccRingS 1.2s infinite}.cc-puck.ov-pronto{animation:ccRingT 1s infinite}
   @keyframes ccRingY{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(234,179,8,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 11px rgba(234,179,8,.6)}}
-  @keyframes ccRingM{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(192,38,211,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 11px rgba(192,38,211,.55)}}
-  @keyframes ccRingS{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(14,165,233,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 10px rgba(14,165,233,.55)}}
-  @keyframes ccRingT{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(20,184,166,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 11px rgba(20,184,166,.55)}}
+  @keyframes ccRingM{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(220,38,38,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 11px rgba(220,38,38,.55)}}
+  @keyframes ccRingS{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(234,88,12,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 10px rgba(234,88,12,.55)}}
+  @keyframes ccRingT{0%,100%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 0 rgba(22,163,74,0)}50%{box-shadow:0 3px 8px rgba(0,0,0,.3),0 0 0 11px rgba(22,163,74,.55)}}
   .cc-resumo{display:flex;flex-wrap:wrap;gap:8px}
   .cc-resumo .r{border-radius:14px;padding:8px 14px;font-weight:900;font-size:.85rem}
   .cc-resumo .livre{background:#dcfce7;color:#14532d}.cc-resumo .ocup{background:#ffedd5;color:#7c2d12}.cc-resumo .conta{background:#fee2e2;color:#7f1d1d}
   .cc-tray{display:flex;flex-direction:column;gap:8px;margin-top:4px}
   .cc-tray-grid{display:flex;flex-wrap:wrap;gap:12px;padding:8px 6px}
   .cc-tray-grid .cc-puck{position:relative;transform:none;z-index:auto}
-  .cc-chip.pedido{background:#c026d3}
-  .cc-cm.novo{border-color:#c026d3;animation:ccCmM .9s infinite}.cc-cm.prep{border-color:#0ea5e9;animation:ccCmS 1.2s infinite}.cc-cm.pronto{border-color:#14b8a6;animation:ccCmT 1s infinite}
-  @keyframes ccCmM{50%{box-shadow:0 0 0 6px rgba(192,38,211,.35)}}@keyframes ccCmS{50%{box-shadow:0 0 0 5px rgba(14,165,233,.35)}}@keyframes ccCmT{50%{box-shadow:0 0 0 6px rgba(20,184,166,.4)}}
-  .cc-st.novo{background:#c026d3}.cc-st.prep{background:#0ea5e9}.cc-st.pronto{background:#14b8a6}
+  .cc-chip.pedido{background:#dc2626}
+  .cc-cm.novo{border-color:#dc2626;animation:ccCmM .9s infinite}.cc-cm.prep{border-color:#ea580c;animation:ccCmS 1.2s infinite}.cc-cm.pronto{border-color:#16a34a;animation:ccCmT 1s infinite}
+  @keyframes ccCmM{50%{box-shadow:0 0 0 6px rgba(220,38,38,.35)}}@keyframes ccCmS{50%{box-shadow:0 0 0 5px rgba(234,88,12,.35)}}@keyframes ccCmT{50%{box-shadow:0 0 0 6px rgba(22,163,74,.4)}}
+  .cc-st.novo{background:#dc2626}.cc-st.prep{background:#ea580c}.cc-st.pronto{background:#16a34a}
   `;
   document.head.appendChild(st);
 }
@@ -15166,7 +15200,6 @@ function ccIniciarModoCliente() {
   if (localBanner) localBanner.textContent = config.local || "";
   const bannerImg = document.getElementById("cc-home-banner-img");
   if (bannerImg && config.designBanner) bannerImg.style.backgroundImage = "url(" + config.designBanner + ")";
-  ccInjetarComandaTeste(S.mesa);
 
   // O Cardápio de #view-cardapio tem 4 filhos diretos: header (banner),
   // busca, categorias e main (itens). Banner e itens rolam livremente
@@ -15595,30 +15628,6 @@ function _ccSyncSetaCarrosselAbas() {
   nav._arrowOk = true;
 }
 
-function ccInjetarComandaTeste(mesa) {
-  if (!mesa) return;
-  const linhas = ccContaAtualMesa(mesa);
-  if (linhas.length) return;
-  const itensTeste = [
-    { id: "TESTE_MOQUECA", nome: "Moqueca de Camarão", q: 1, preco: 120.00 },
-    { id: "TESTE_COCO", nome: "Água de Coco", q: 2, preco: 8.00 }
-  ];
-  const total = itensTeste.reduce((s, i) => s + i.preco * i.q, 0);
-  historico.unshift({
-    id: "TESTE_" + Date.now(),
-    data: new Date().toISOString(),
-    mesa: mesa,
-    itens: itensTeste,
-    total: total,
-    pag: "pos_pago",
-    status: "pago",
-    obs: "⚠️ Comanda de teste (homologação) — sem consumo real",
-    atendente: null,
-    teste: true
-  });
-  salvar("historico", historico);
-}
-
 function ccRenderFechamentoCliente() {
   _ccRenderExtratoGenerico("fechamento");
   ccRenderFaseConta("fechamento");
@@ -15698,20 +15707,18 @@ function ccPedirContaCliente() {
   if (!S.mesa) return;
   const linhas = ccContaAtualMesa(S.mesa);
   if (!linhas.length) { toast("⚠️ Ainda não há pedidos nesta mesa."); return; }
-  const total = linhas.reduce((s, l) => s + (l.total || 0), 0);
-  const itens = linhas.flatMap(l => l.itens);
+  const n = Number(S.mesa);
+  // Saldo da mesa = pedidos ainda não encerrados (mesma regra do botão "conta" do atendente).
+  const saldo = pedidosCozinha.filter(p => Number(p.mesa) === n && p.status !== "entregue").reduce((a, p) => a + (Number(p.total) || 0), 0);
+  if (!(saldo > 0)) { toast("⚠️ Esta mesa não tem saldo a pagar."); return; }
   const btn = document.getElementById("cc-fechamento-pagar-btn");
   const aguardando = document.getElementById("cc-fechamento-aguardando");
+  // NUNCA confirma pagamento nem gera recibo aqui. Só avisa o atendente/caixa (mesa vermelha, saldo gravado).
+  // A confirmação vem apenas do webhook real do Mercado Pago (ccEscutarPagamentoCliente) ou da baixa manual do Caixa.
+  ccSetMesaStatus(n, "conta", saldo);
   if (btn) { btn.disabled = true; btn.style.opacity = ".6"; }
   if (aguardando) aguardando.classList.remove("hidden");
-  setTimeout(() => {
-    _ccEncerrarMesaComRecibo(total, itens, "pix");
-    const recibo = carregar("ultimoReciboCliente_" + S.mesa, null);
-    ccRenderReciboDigital(recibo);
-    if (btn) { btn.disabled = false; btn.style.opacity = ""; }
-    if (aguardando) aguardando.classList.add("hidden");
-    toast(`✅ Conta da Mesa ${String(S.mesa).padStart(2, "0")} paga via Pix — ${fmtBRL(total)}`);
-  }, 4000);
+  toast(`🧾 Conta da Mesa ${String(S.mesa).padStart(2, "0")} solicitada — o pagamento só é confirmado pelo Caixa ou pelo Pix real.`);
 }
 
 // Fechamento no Fiado — cobra o total direto no saldo devedor do cliente
@@ -21558,8 +21565,8 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   }
   if (!ehTotem()) return;
 
-  var CORES = { livre: "#16a34a", ocupada: "#eab308", conta: "#2563eb" };
-  var LEGENDA = { livre: "🟢 Livre", ocupada: "🟡 Ocupada", conta: "🔵 Pedido feito" };
+  var CORES = { livre: "#16a34a", ocupada: "#ea580c", conta: "#dc2626" };
+  var LEGENDA = { livre: "🟢 Livre", ocupada: "🟠 Ocupada", conta: "🔴 Pedindo conta" };
 
   function iniciar() {
     var tela = document.getElementById("cc-totem-tela");
@@ -21911,10 +21918,10 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       "#cc-todas-mesas .tm-card.clicavel{cursor:pointer}" +
       "#cc-todas-mesas .s-livre{border-color:#16a34a;background:#f0fdf4;color:#14532d}" +
       "#cc-todas-mesas .s-ocupada{border-color:#ea580c;background:#fff7ed;color:#7c2d12}" +
-      "#cc-todas-mesas .s-novo{border-color:#2563eb;background:#eff6ff;color:#1e3a8a}" +
+      "#cc-todas-mesas .s-novo{border-color:#dc2626;background:#fee2e2;color:#7f1d1d}" +
       "#cc-todas-mesas .s-prep{border-color:#d97706;background:#fffbeb;color:#78350f}" +
       "#cc-todas-mesas .s-pronto{border-color:#15803d;background:#dcfce7;color:#14532d}" +
-      "#cc-todas-mesas .s-camp{border-color:#7c3aed;background:#ede9fe;color:#4c1d95}" +
+      "#cc-todas-mesas .s-camp{border-color:#ea580c;background:#ffedd5;color:#7c2d12}" +
       "#cc-todas-mesas .s-conta{border-color:#dc2626;background:#fee2e2;color:#7f1d1d}";
     document.head.appendChild(st);
   }
