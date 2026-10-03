@@ -6613,7 +6613,7 @@ function _ccMontarMapaMesasHTML() {
   const maxN = Math.max(config.numMesas || 20, ...Object.keys(mesaStatus).map(Number).filter(n => !isNaN(n)), 1);
   // Toda mesa com coordenada salva (override do dono, mesaGeo ou calibração do admin) entra no mapa,
   // inclusive número acima de config.numMesas — nenhuma mesa salva fica oculta.
-  const _calPos = n => { try { const c = ccCalibracaoMesas && ccCalibracaoMesas[n]; if (!(c && isFinite(c.lat) && isFinite(c.lng) && !(c.lat === 0 && c.lng === 0))) return null; if (!ccMesaEhFixa(n) && config.posicoesResetEm && (Number(c.ts) || 0) <= config.posicoesResetEm) return null; return { lat: c.lat, lng: c.lng }; } catch (er) { return null; } }; // Mesa/QR Móvel calibrada antes do reset não volta ao mapa; Mesa Fixa sempre desenha
+  const _calPos = n => { try { const c = ccCalibracaoMesas && ccCalibracaoMesas[n]; if (!(c && isFinite(c.lat) && isFinite(c.lng) && !(c.lat === 0 && c.lng === 0))) return null; if (!ccMesaEhFixa(n) && ((config.posicoesResetEm && (Number(c.ts) || 0) <= config.posicoesResetEm) || (Number(c.ts) || 0) < ccInicioDiaOperacionalMs())) return null; return { lat: c.lat, lng: c.lng }; } catch (er) { return null; } }; // Mesa/QR Móvel calibrada antes do reset não volta ao mapa; Mesa Fixa sempre desenha
   const _nums = [];
   for (let n = 1; n <= maxN; n++) _nums.push(n);
   let _calKeys = []; try { _calKeys = Object.keys(ccCalibracaoMesas || {}); } catch (er) {}
@@ -13931,6 +13931,7 @@ function _injetarPainelCalibracaoMesas(hostId) {
       <p class="text-xs font-bold" style="color:#991b1b;margin-bottom:8px">Zera as posições (latitude/longitude) somente das Mesas/QR Móveis, na nuvem e em todos os aparelhos conectados. Mesas Fixas nunca são afetadas.</p>
       <button id="cal-zerar-nuvem-btn" onclick="ccZerarPosicoesNuvem()" style="width:100%;padding:12px;border:none;border-radius:10px;background:#dc2626;color:#fff;font-weight:900;font-size:.8rem;cursor:pointer">⚠️ ZERAR MAPA DE LOCALIZAÇÃO</button>
       <p id="cal-zerar-nuvem-msg" style="font-size:.7rem;margin-top:8px;color:#7f1d1d"></p>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:.74rem;font-weight:700;color:#991b1b;cursor:pointer"><input type="checkbox" ${config.resetDiarioMoveis === false ? "" : "checked"} onchange="ccToggleResetDiario(this.checked)"/> Zerar automaticamente todo dia (só Mesas/QR Móveis) para recalibrar</label>
     </div>`}`;
   if (ancora && ancora.parentElement === adminEl) adminEl.insertBefore(panel, ancora.nextSibling);
   else adminEl.prepend(panel);
@@ -13957,7 +13958,7 @@ async function ccPublicarCalibracoesPendentes() {
     for (const n of nums) {
       const c = ccCalibracaoMesas[n];
       if (!c || !isFinite(c.lat) || !isFinite(c.lng) || (c.lat === 0 && c.lng === 0)) continue;
-      if (config.posicoesResetEm && !ccMesaEhFixa(n) && (Number(c.ts) || 0) <= config.posicoesResetEm) { delete ccCalibracaoMesas[n]; _ccSalvarCalibracaoMesas(); continue; } // anterior ao reset
+      if (!ccMesaEhFixa(n) && ((config.posicoesResetEm && (Number(c.ts) || 0) <= config.posicoesResetEm) || (Number(c.ts) || 0) < ccInicioDiaOperacionalMs())) { delete ccCalibracaoMesas[n]; _ccSalvarCalibracaoMesas(); continue; } // anterior ao reset
       mesaGeo[Number(n)] = { lat: c.lat, lng: c.lng };
       await ccGravarGeoMesa(n, c.lat, c.lng);
     }
@@ -13996,11 +13997,13 @@ function ccAplicarResetRecebido(PayloadTempoReal) {
   try {
     if (!PayloadTempoReal || PayloadTempoReal.emp !== window.COOKCONTROL_EMPRESA_ID_ATIVA) return;
     config.posicoesResetEm = PayloadTempoReal.ts; // marca: calibrações antigas deste aparelho não são republicadas
+    config.posicoesResetDia = ccDiaOperacional();  // o dia operacional já foi zerado: este aparelho não repete o reset diário
     ccLimparPosicoesLocal();
-    if (typeof toast === "function") toast("📍 Mesas/QR Móveis zeradas pelo administrador (Mesas Fixas mantidas).");
+    if (typeof toast === "function") toast(PayloadTempoReal.origem === "diario"
+      ? "📍 Novo dia: Mesas/QR Móveis zeradas — escaneie o QR de cada mesa para recalibrar (Mesas Fixas mantidas)."
+      : "📍 Mesas/QR Móveis zeradas pelo administrador (Mesas Fixas mantidas).");
   } catch (e) { console.warn("[Reset posições] aplicar:", e && e.message); }
-}
-function _ccCanalResetObter(emp) {
+}function _ccCanalResetObter(emp) {
   if (_ccCanalResetProm && _ccCanalResetEmp === emp) return _ccCanalResetProm;
   _ccCanalResetEmp = emp;
   _ccCanalResetProm = new Promise(function (res) {
@@ -14022,6 +14025,30 @@ document.addEventListener("DOMContentLoaded", function () {
     try { if (window.COOKCONTROL_EMPRESA_ID_ATIVA && !(typeof ccEhAcessoCliente === "function" && ccEhAcessoCliente())) _ccCanalResetObter(window.COOKCONTROL_EMPRESA_ID_ATIVA); } catch (e) {}
   }, 1200);
 });
+// Núcleo único do reset: UPDATE assíncrono no Supabase só onde fixa é false/nula + broadcast para toda a brigada.
+async function ccExecutarResetMoveis(origem) {
+  const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+  const sb = ccGetSupabaseClient(), _fixas = ccNumerosFixos();
+  const completo = { latitude: null, longitude: null, gps_cliente_lat: null, gps_cliente_lng: null, sinal_tipo: null }, basico = { latitude: null, longitude: null };
+  // UPDATE (não DELETE) limpando coordenadas EXCLUSIVAMENTE onde fixa é false/nula; fixa = true nunca é tocada.
+  const _upd = function (campos, viaColuna) {
+    let q = sb.from("mesas").update(campos).eq("empresa_id", emp);
+    q = viaColuna ? q.or("fixa.is.null,fixa.eq.false") : (_fixas.length ? q.not("numero", "in", "(" + _fixas.join(",") + ")") : q);
+    return q.select("numero");
+  };
+  let r = await _upd(completo, true);
+  if (r.error) r = await _upd(basico, true);                                   // banco sem as colunas do sinal do cliente
+  if (r.error) { r = await _upd(completo, false); if (r.error) r = await _upd(basico, false); } // banco sem a coluna 'fixa': protege pelas fixas conhecidas
+  if (r.error) throw new Error(r.error.message || "falha no Supabase");
+  const n = Array.isArray(r.data) ? r.data.length : 0;
+  const PayloadTempoReal = { emp: emp, ts: Date.now(), origem: origem || "admin" };
+  config.posicoesResetEm = PayloadTempoReal.ts;
+  config.posicoesResetDia = ccDiaOperacional();
+  ccLimparPosicoesLocal(); // zera ccCalibracaoMesas, mesaGeo, mesaGeoCliente e ajustes do dono neste aparelho (e salva o config)
+  const ok = await _ccCanalResetObter(emp);
+  if (ok && _ccCanalReset) await _ccCanalReset.send({ type: "broadcast", event: "zerar_posicoes", payload: PayloadTempoReal });
+  return { n: n, ok: ok };
+}
 async function ccZerarPosicoesNuvem() {
   const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
   const btn = document.getElementById("cal-zerar-nuvem-btn"), msg = document.getElementById("cal-zerar-nuvem-msg");
@@ -14032,25 +14059,8 @@ async function ccZerarPosicoesNuvem() {
   if ((prompt('Para confirmar, digite ZERAR') || "").trim().toUpperCase() !== "ZERAR") { say("Cancelado."); return; }
   if (btn) { btn.disabled = true; btn.textContent = "⏳ Apagando na nuvem…"; }
   try {
-    const sb = ccGetSupabaseClient(), _fixas = ccNumerosFixos();
-    const completo = { latitude: null, longitude: null, gps_cliente_lat: null, gps_cliente_lng: null, sinal_tipo: null }, basico = { latitude: null, longitude: null };
-    // UPDATE (não DELETE) limpando coordenadas EXCLUSIVAMENTE onde fixa é false/nula; fixa = true nunca é tocada.
-    const _upd = function (campos, viaColuna) {
-      let q = sb.from("mesas").update(campos).eq("empresa_id", emp);
-      q = viaColuna ? q.or("fixa.is.null,fixa.eq.false") : (_fixas.length ? q.not("numero", "in", "(" + _fixas.join(",") + ")") : q);
-      return q.select("numero");
-    };
-    let r = await _upd(completo, true);
-    if (r.error) r = await _upd(basico, true);                                   // banco sem as colunas do sinal do cliente
-    if (r.error) { r = await _upd(completo, false); if (r.error) r = await _upd(basico, false); } // banco sem a coluna 'fixa': protege pelas fixas conhecidas
-    if (r.error) throw new Error(r.error.message || "falha no Supabase");
-    const n = Array.isArray(r.data) ? r.data.length : 0;
-    const PayloadTempoReal = { emp: emp, ts: Date.now(), origem: "admin" };
-    config.posicoesResetEm = PayloadTempoReal.ts;
-    ccLimparPosicoesLocal(); // zera ccCalibracaoMesas, mesaGeo, mesaGeoCliente e ajustes do dono neste aparelho
-    const ok = await _ccCanalResetObter(emp);
-    if (ok && _ccCanalReset) await _ccCanalReset.send({ type: "broadcast", event: "zerar_posicoes", payload: PayloadTempoReal });
-    say("✅ " + n + " Mesa(s)/QR Móvel(is) zerada(s) na nuvem (Mesas Fixas intactas)." + (ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
+    const res = await ccExecutarResetMoveis("admin");
+    say("✅ " + res.n + " Mesa(s)/QR Móvel(is) zerada(s) na nuvem (Mesas Fixas intactas)." + (res.ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
   } catch (e) {
     say("❌ Nada foi alterado: " + (e && e.message ? e.message : e));
   } finally {
@@ -14058,6 +14068,55 @@ async function ccZerarPosicoesNuvem() {
   }
 }
 
+// ═══ RESET DIÁRIO AUTOMÁTICO DAS MESAS/QR MÓVEIS ═══════════════════════════════
+// Todo dia operacional (vira às 5h, ajustável em config.resetDiarioHoraCorte) as Mesas/QR Móveis são zeradas
+// sozinhas para serem recalibradas pela câmera. Mesas Fixas nunca entram. Roda uma única vez por dia: o primeiro
+// aparelho de equipe que abrir o app faz o UPDATE e avisa os demais pelo canal ao vivo; o dia fica marcado no
+// config sincronizado (posicoesResetDia), então os outros aparelhos não repetem.
+function ccInicioDiaOperacionalMs() {
+  const corte = Number(config.resetDiarioHoraCorte); const h = isFinite(corte) && corte >= 0 && corte < 24 ? corte : 5;
+  const n = new Date(), ini = new Date(n.getFullYear(), n.getMonth(), n.getDate(), h, 0, 0, 0);
+  if (n.getTime() < ini.getTime()) ini.setDate(ini.getDate() - 1);
+  return ini.getTime();
+}
+function ccDiaOperacional() {
+  const d = new Date(ccInicioDiaOperacionalMs()), p = function (v) { return String(v).padStart(2, "0"); };
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+function ccToggleResetDiario(ativo) {
+  config.resetDiarioMoveis = !!ativo;
+  try { salvar("config", config); } catch (e) {}
+  try { toast(ativo ? "🔄 Reset diário das Mesas/QR Móveis ATIVADO" : "Reset diário das Mesas/QR Móveis desativado"); } catch (e) {}
+}
+let _ccResetDiarioRodando = false;
+async function ccResetDiarioMoveis() {
+  if (_ccResetDiarioRodando) return;
+  const antes = config.posicoesResetDia;
+  try {
+    if (config.resetDiarioMoveis === false) return;
+    if (typeof ccEhAcessoCliente === "function" && ccEhAcessoCliente()) return;
+    if (!window.COOKCONTROL_EMPRESA_ID_ATIVA || !navigator.onLine) return;
+    const dia = ccDiaOperacional();
+    if (config.posicoesResetDia === dia) return; // hoje já foi zerado (por este ou por outro aparelho)
+    const ini = ccInicioDiaOperacionalMs();
+    const jaCalibrouHoje = Object.keys(ccCalibracaoMesas || {}).some(function (k) { const c = ccCalibracaoMesas[k]; return !ccMesaEhFixa(k) && c && (Number(c.ts) || 0) >= ini; });
+    if (jaCalibrouHoje) { config.posicoesResetDia = dia; salvar("config", config); return; } // o dia já começou e já tem mesa recalibrada: nunca apagar
+    _ccResetDiarioRodando = true;
+    config.posicoesResetDia = dia; salvar("config", config); // marca antes: aparelhos que abrirem agora não repetem
+    const res = await ccExecutarResetMoveis("diario");
+    try { toast("📍 Novo dia: " + res.n + " Mesa(s)/QR Móvel(is) zerada(s) — escaneie o QR de cada mesa para recalibrar."); } catch (e) {}
+  } catch (e) {
+    config.posicoesResetDia = antes; try { salvar("config", config); } catch (er) {} // falhou: tenta de novo na próxima abertura
+    console.warn("[Reset diário] falhou:", e && e.message);
+  } finally { _ccResetDiarioRodando = false; }
+}
+document.addEventListener("DOMContentLoaded", function () {
+  let tentativas = 0;
+  (function aguardar() {
+    if (window.COOKCONTROL_EMPRESA_ID_ATIVA) { ccResetDiarioMoveis(); return; }
+    if (++tentativas < 30) setTimeout(aguardar, 1000);
+  })();
+});
 // ─── SINAL DE CONFIRMAÇÃO COMBINADO (Mesa fixa + GPS vivo do celular) ──
 // Módulo isolado — NÃO altera ccCapturarGeoMesa()/ccGravarGeoMesa() (a
 // posição fixa do guarda-sol/mesa continua exatamente como está, uma
