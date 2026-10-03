@@ -6613,7 +6613,7 @@ function _ccMontarMapaMesasHTML() {
   const maxN = Math.max(config.numMesas || 20, ...Object.keys(mesaStatus).map(Number).filter(n => !isNaN(n)), 1);
   // Toda mesa com coordenada salva (override do dono, mesaGeo ou calibração do admin) entra no mapa,
   // inclusive número acima de config.numMesas — nenhuma mesa salva fica oculta.
-  const _calPos = n => { try { const c = ccCalibracaoMesas && ccCalibracaoMesas[n]; return (c && isFinite(c.lat) && isFinite(c.lng) && !(c.lat === 0 && c.lng === 0)) ? { lat: c.lat, lng: c.lng } : null; } catch (er) { return null; } };
+  const _calPos = n => { try { const c = ccCalibracaoMesas && ccCalibracaoMesas[n]; if (!(c && isFinite(c.lat) && isFinite(c.lng) && !(c.lat === 0 && c.lng === 0))) return null; if (!ccMesaEhFixa(n) && config.posicoesResetEm && (Number(c.ts) || 0) <= config.posicoesResetEm) return null; return { lat: c.lat, lng: c.lng }; } catch (er) { return null; } }; // Mesa/QR Móvel calibrada antes do reset não volta ao mapa; Mesa Fixa sempre desenha
   const _nums = [];
   for (let n = 1; n <= maxN; n++) _nums.push(n);
   let _calKeys = []; try { _calKeys = Object.keys(ccCalibracaoMesas || {}); } catch (er) {}
@@ -6991,7 +6991,7 @@ function _ccScanGarantirHost() {
     host.innerHTML =
       '<div class="cc-scan-bar">'
       + '<button id="cc-scan-btn" onclick="ccScanAlternar()">📷 Calibrar mesas pelo QR</button>'
-      + '<button id="cc-scan-modo" onclick="ccScanAlternarModo()">' + (_ccScan.modoFixa ? "🏠 Salão fixo" : "🏖️ Areia") + '</button>'
+      + '<button id="cc-scan-modo" onclick="ccScanAlternarModo()">' + (_ccScan.modoFixa ? "📌 Mesa Fixa" : "🔄 Mesa/QR Móvel") + '</button>'
       + '<span id="cc-scan-info" class="cc-scan-info">Câmera desligada</span></div>'
       + '<div id="cc-scan-box" hidden>'
       + '<div class="cc-scan-vwrap"><video id="cc-scan-video" playsinline muted autoplay></video>'
@@ -7035,10 +7035,9 @@ function _ccScanCarregarJsQR() {
 function ccScanAlternarModo() {
   _ccScan.modoFixa = !_ccScan.modoFixa;
   try { localStorage.setItem("cc_scan_modo_fixa", _ccScan.modoFixa ? "1" : "0"); } catch (e) {}
-  const b = document.getElementById("cc-scan-modo"); if (b) b.textContent = _ccScan.modoFixa ? "🏠 Salão fixo" : "🏖️ Areia";
-  _ccScanMsg(_ccScan.modoFixa ? "🏠 Modo Salão fixo: mesa lida fica gravada para sempre." : "🏖️ Modo Areia: a posição vale para hoje e é refeita a cada ronda.", "ok");
-}
-async function ccScanAlternar() { if (_ccScan.on) ccScanFechar(); else await ccScanAbrir(); }
+  const b = document.getElementById("cc-scan-modo"); if (b) b.textContent = _ccScan.modoFixa ? "📌 Mesa Fixa" : "🔄 Mesa/QR Móvel";
+  _ccScanMsg(_ccScan.modoFixa ? "📌 Mesa Fixa: a mesa lida é gravada uma única vez e nunca é zerada." : "🔄 Mesa/QR Móvel: a posição vale até o reset e é recalibrada sempre que a mesa mudar de lugar.", "ok");
+}async function ccScanAlternar() { if (_ccScan.on) ccScanFechar(); else await ccScanAbrir(); }
 
 async function ccScanAbrir() {
   _ccScanGarantirHost();
@@ -7161,11 +7160,11 @@ async function _ccScanCalibrar(n) {
   _ccScan.vistos = _ccScan.vistos || {};
   const liberar = function (esperaMs) { _ccScan.vistos[n] = Date.now() - 6000 + (esperaMs || 0); }; // permite nova tentativa
   try {
-    // Mesa FIXA do salão já calibrada vale para sempre: o scanner só confirma e segue (sem regravar, sem janela).
+    // Mesa Fixa já calibrada vale para sempre: o scanner só confirma e segue (sem regravar, sem janela).
     const temPos = !!(mesaGeo[n] || (ccCalibracaoMesas[n] && isFinite(ccCalibracaoMesas[n].lat)));
     if (ccMesaEhFixa(n) && temPos) {
       _ccScan.vistos[n] = Date.now() + 8000;
-      _ccScanMsg("🏠 Mesa " + rot + " fixa do salão — já calibrada. Próxima!", "ok");
+      _ccScanMsg("📌 Mesa " + rot + " fixa — já calibrada. Próxima!", "ok");
       return;
     }
     _ccScanMsg("📡 Mesa " + rot + " — fixando posição…");
@@ -7183,7 +7182,7 @@ async function _ccScanCalibrar(n) {
     ccCalibracaoMesas[n] = {
       lat: pos.lat, lng: pos.lng, prec: pos.prec,
       setor: (ccCalibracaoMesas[n] && ccCalibracaoMesas[n].setor) || "",
-      area: fixa ? "Salão" : ((areaAnt && !/sal[ãa]o/i.test(areaAnt)) ? areaAnt : "Praia"), fixa: fixa, ts: Date.now()
+      area: areaAnt, fixa: fixa, ts: Date.now() // a flag fixa é a única regra de comportamento; a área é só rótulo livre
     };
     ccDefinirFixa(n, fixa);
     _ccSalvarCalibracaoMesas();
@@ -7196,7 +7195,7 @@ async function _ccScanCalibrar(n) {
     _ccScan.hist.unshift({ n: n, prec: pos.prec, moveu: (moveu != null && moveu >= 2) ? moveu : null });
     if (_ccScan.hist.length > 6) _ccScan.hist.length = 6;
     _ccScanLogHTML();
-    _ccScanMsg("✅ Mesa " + rot + (fixa ? " (fixa)" : "") + " fixada (±" + Math.round(pos.prec) + "m) — câmera segue ativa, próxima mesa!", "ok");
+    _ccScanMsg("✅ Mesa " + rot + (fixa ? " (fixa)" : " (móvel)") + " fixada (±" + Math.round(pos.prec) + "m) — câmera segue ativa, próxima mesa!", "ok");
     _ccMapaBip();
     const fl = document.getElementById("cc-scan-flash");
     if (fl) { fl.classList.add("on"); setTimeout(function () { fl.classList.remove("on"); }, 600); }
@@ -13660,14 +13659,15 @@ async function ccAtualizarMesaSupabase(empresaId, numeroMesa, status, total) {
 // (não a cada pedido -- a mesa não anda, só muda de lugar de um dia
 // pro outro). Some quando a mesa fecha, porque no dia seguinte pode
 // estar armada em outro canto da praia/salão.
-// Mesa FIXA (true = madeira do salão coberto, calibrada uma vez na vida) x AREIA (false = muda todo dia com a maré).
+// Flag de hardware por mesa: true = Mesa Fixa (calibrada uma única vez, nunca zerada) · false/nula = Mesa/QR Móvel (zerável e recalibrável).
+// Nenhuma regra deriva de nome de local ou de área: a única fonte é o boolean gravado (config.mesasFixas > calibração > coluna "fixa" na nuvem).
 let _ccSemColunaFixa = false;
 function ccMesaEhFixa(n) {
   const k = String(parseInt(n, 10));
   if (k === "NaN") return false;
   try { if (config.mesasFixas && typeof config.mesasFixas[k] === "boolean") return config.mesasFixas[k]; } catch (e) {}
   try { const c = ccCalibracaoMesas && ccCalibracaoMesas[k]; if (c && typeof c.fixa === "boolean") return c.fixa; } catch (e) {}
-  try { return /sal[ãa]o/i.test((config.areasMesas && config.areasMesas[k]) || ""); } catch (e) { return false; }
+  return false; // flag ausente/nula = Mesa/QR Móvel
 }
 function ccDefinirFixa(n, fixa) {
   const k = String(parseInt(n, 10));
@@ -13679,7 +13679,7 @@ function ccDefinirFixa(n, fixa) {
 }
 function ccNumerosFixos() {
   const set = {};
-  [mesaGeo, ccCalibracaoMesas, config.mesasFixas || {}, config.areasMesas || {}].forEach(o => { try { Object.keys(o).forEach(k => { if (ccMesaEhFixa(k)) set[Number(k)] = 1; }); } catch (e) {} });
+  [mesaGeo, ccCalibracaoMesas, config.mesasFixas || {}].forEach(o => { try { Object.keys(o).forEach(k => { if (ccMesaEhFixa(k)) set[Number(k)] = 1; }); } catch (e) {} });
   return Object.keys(set).map(Number).filter(isFinite);
 }
 // As fixas ficam salvas neste aparelho: a brigada abre o app já com o salão desenhado, mesmo sem rede.
@@ -13827,14 +13827,17 @@ function ccCalibrarPosicaoMesa() {
         area: _ccAreaSelecionada() || (ccCalibracaoMesas[num] ? ccCalibracaoMesas[num].area : "") || "",
         ts: Date.now()
       };
-      ccCalibracaoMesas[num].fixa = /sal[ãa]o/i.test(ccCalibracaoMesas[num].area || "");
-      ccDefinirFixa(num, ccCalibracaoMesas[num].fixa);
+      const _fxSel = document.getElementById("cal-mesa-fixa");
+      const _fixa = _fxSel ? _fxSel.value === "1" : ccMesaEhFixa(num); // só o seletor Mesa Fixa / Mesa/QR Móvel decide
+      ccCalibracaoMesas[num].fixa = _fixa;
+      ccDefinirFixa(num, _fixa);
       _ccSalvarCalibracaoMesas();
       _ccAreaGravar(num, ccCalibracaoMesas[num].area);
       if (btn) { btn.disabled = false; btn.textContent = "📍 Salvar Posição Aqui"; }
       // Publica a posição calibrada na tabela "mesas" (mapa do atendente lê daqui) e atualiza o mapa local.
       mesaGeo[Number(num)] = { lat: _lat, lng: _lng };
-      Promise.resolve(ccGravarGeoMesa(num, _lat, _lng)).then(function () {
+      if (_fixa) ccPersistirFixasGeo();
+      Promise.resolve(ccGravarGeoMesa(num, _lat, _lng, _fixa)).then(function () {
         toast(`✅ Mesa ${num} calibrada e publicada no mapa (±${Math.round(_prec)}m)`);
       }).catch(function (e) { toast("⚠️ Calibrada neste aparelho, mas não publicou no servidor: " + (e && e.message)); });
       if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
@@ -13848,6 +13851,13 @@ function ccCalibrarPosicaoMesa() {
   );
 }
 
+// Ao digitar o nº da mesa, o seletor já mostra o comportamento gravado (evita desfixar sem querer).
+function ccSincronizarFixaSelecionada() {
+  const sel = document.getElementById("cal-mesa-sel"), fx = document.getElementById("cal-mesa-fixa");
+  if (!sel || !fx) return;
+  const n = parseInt(sel.value, 10);
+  if (isFinite(n)) fx.value = ccMesaEhFixa(n) ? "1" : "0";
+}
 function ccApagarCalibracaoMesa(num) {
   delete ccCalibracaoMesas[num];
   _ccSalvarCalibracaoMesas();
@@ -13866,7 +13876,7 @@ function _ccRenderListaCalibracao() {
     const c = ccCalibracaoMesas[n];
     const h = Math.round((Date.now() - c.ts) / 3600000);
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px">
-      <span style="font-size:.74rem"><strong>Mesa ${n}</strong>${c.area ? " · " + c.area : ""}${c.setor ? " · " + c.setor : ""} <span style="color:#9ca3af">(±${Math.round(c.prec || 0)}m, há ${h}h)</span></span>
+      <span style="font-size:.74rem"><strong>Mesa ${n}</strong>${" · " + (ccMesaEhFixa(n) ? "📌 Fixa" : "🔄 Móvel")}${c.area ? " · " + c.area : ""}${c.setor ? " · " + c.setor : ""} <span style="color:#9ca3af">(±${Math.round(c.prec || 0)}m, há ${h}h)</span></span>
       <button onclick="ccApagarCalibracaoMesa('${n}')" style="border:none;background:none;color:#dc2626;font-size:.8rem;cursor:pointer">🗑️</button>
     </div>`;
   }).join("");
@@ -13893,19 +13903,23 @@ function _injetarPainelCalibracaoMesas(hostId) {
   panel.className = "admin-card mb-4";
   panel.innerHTML = `
     <p class="font-bold text-sm uppercase tracking-widest text-orange-400 mb-3">📍 Calibrar Posição das Mesas (Radar do Garçom)</p>
-    <p class="text-xs text-gray-400 mb-4">De manhã, ao montar as mesas, ande até cada uma e salve a posição real dela aqui. Isso alimenta a seta de direção e a distância que o garçom vê no celular. As filas/setor são só um texto livre pra organizar -- descreva do seu jeito (ex: "Praia — Fila 1, frente ao mar").</p>
+    <p class="text-xs text-gray-400 mb-4">De manhã, ao montar as mesas, ande até cada uma e salve a posição real dela aqui. Isso alimenta a seta de direção e a distância que o garçom vê no celular. As filas/setor são só um texto livre pra organizar -- descreva do seu jeito (ex: "Fila 1, frente ao palco"). Marque cada mesa como Mesa Fixa (calibrada uma única vez, nunca zerada) ou Mesa/QR Móvel (zerável e recalibrável a cada mudança de lugar).</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
       <div style="flex:1;min-width:140px">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Mesa</label>
-        <input class="input-base" id="cal-mesa-sel" type="number" inputmode="numeric" min="1" placeholder="Nº da mesa (qualquer número)"/>
+        <input class="input-base" id="cal-mesa-sel" type="number" inputmode="numeric" min="1" placeholder="Nº da mesa (qualquer número)" oninput="ccSincronizarFixaSelecionada()"/>
       </div>
       <div style="flex:1;min-width:130px">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Área</label>
         <select class="input-base" id="cal-mesa-area"><option value="Salão">🏠 Salão</option><option value="Varanda">🌿 Varanda</option><option value="Praia">🏖️ Praia</option><option value="Outra">📍 Outra</option></select>
       </div>
+      <div style="flex:1;min-width:150px">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Comportamento</label>
+        <select class="input-base" id="cal-mesa-fixa"><option value="0">🔄 Mesa/QR Móvel</option><option value="1">📌 Mesa Fixa</option></select>
+      </div>
       <div style="flex:1;min-width:160px">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Setor / fila (opcional)</label>
-        <input class="input-base" id="cal-mesa-setor" placeholder="Ex: Praia — Fila 1"/>
+        <input class="input-base" id="cal-mesa-setor" placeholder="Ex: Fila 1"/>
       </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -13914,7 +13928,7 @@ function _injetarPainelCalibracaoMesas(hostId) {
     </div>
     <div id="cal-mesa-lista" style="margin-top:14px"></div>
     ${hostId ? "" : `<div style="margin-top:16px;padding:12px;border:2px dashed #dc2626;border-radius:12px;background:#fef2f2">
-      <p class="text-xs font-bold" style="color:#991b1b;margin-bottom:8px">Ferramenta de testes — apaga TODAS as posições (latitude/longitude) das mesas na nuvem e em todos os aparelhos conectados.</p>
+      <p class="text-xs font-bold" style="color:#991b1b;margin-bottom:8px">Zera as posições (latitude/longitude) somente das Mesas/QR Móveis, na nuvem e em todos os aparelhos conectados. Mesas Fixas nunca são afetadas.</p>
       <button id="cal-zerar-nuvem-btn" onclick="ccZerarPosicoesNuvem()" style="width:100%;padding:12px;border:none;border-radius:10px;background:#dc2626;color:#fff;font-weight:900;font-size:.8rem;cursor:pointer">⚠️ ZERAR MAPA DE LOCALIZAÇÃO</button>
       <p id="cal-zerar-nuvem-msg" style="font-size:.7rem;margin-top:8px;color:#7f1d1d"></p>
     </div>`}`;
@@ -13983,7 +13997,7 @@ function ccAplicarResetRecebido(PayloadTempoReal) {
     if (!PayloadTempoReal || PayloadTempoReal.emp !== window.COOKCONTROL_EMPRESA_ID_ATIVA) return;
     config.posicoesResetEm = PayloadTempoReal.ts; // marca: calibrações antigas deste aparelho não são republicadas
     ccLimparPosicoesLocal();
-    if (typeof toast === "function") toast("📍 Mapa da areia zerado pelo administrador (mesas fixas do salão mantidas).");
+    if (typeof toast === "function") toast("📍 Mesas/QR Móveis zeradas pelo administrador (Mesas Fixas mantidas).");
   } catch (e) { console.warn("[Reset posições] aplicar:", e && e.message); }
 }
 function _ccCanalResetObter(emp) {
@@ -14014,7 +14028,7 @@ async function ccZerarPosicoesNuvem() {
   const say = function (t) { if (msg) msg.textContent = t; try { toast(t); } catch (e) {} };
   if (!emp) { say("⚠️ Dispositivo sem empresa ativa — leia o QR do gerente antes."); return; }
   if (!navigator.onLine) { say("⚠️ Sem internet: nada foi apagado."); return; }
-  if (!confirm("Apagar as posições das mesas da AREIA (fixa = false) na nuvem e em todos os celulares conectados?\n\nAs mesas fixas do salão, o status e os pedidos NÃO são apagados.")) return;
+  if (!confirm("Zerar as posições das Mesas/QR Móveis (fixa = falso ou nula) na nuvem e em todos os celulares conectados?\n\nAs Mesas Fixas, o status e os pedidos NÃO são apagados.")) return;
   if ((prompt('Para confirmar, digite ZERAR') || "").trim().toUpperCase() !== "ZERAR") { say("Cancelado."); return; }
   if (btn) { btn.disabled = true; btn.textContent = "⏳ Apagando na nuvem…"; }
   try {
@@ -14036,7 +14050,7 @@ async function ccZerarPosicoesNuvem() {
     ccLimparPosicoesLocal(); // zera ccCalibracaoMesas, mesaGeo, mesaGeoCliente e ajustes do dono neste aparelho
     const ok = await _ccCanalResetObter(emp);
     if (ok && _ccCanalReset) await _ccCanalReset.send({ type: "broadcast", event: "zerar_posicoes", payload: PayloadTempoReal });
-    say("✅ " + n + " mesa(s) da areia zerada(s) na nuvem (fixas do salão intactas)." + (ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
+    say("✅ " + n + " Mesa(s)/QR Móvel(is) zerada(s) na nuvem (Mesas Fixas intactas)." + (ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
   } catch (e) {
     say("❌ Nada foi alterado: " + (e && e.message ? e.message : e));
   } finally {
@@ -14242,6 +14256,10 @@ async function ccIniciarEscutaMesasRealtime() {
           mesaGeo[linha.numero] = { lat: linha.latitude, lng: linha.longitude };
         } else if ("latitude" in linha) {
           delete mesaGeo[linha.numero];
+          if (linha.fixa !== true && !ccMesaEhFixa(linha.numero)) { // Mesa/QR Móvel zerada na nuvem: este aparelho esquece a cópia local (não ressuscita no mapa nem é republicada)
+            try { delete ccCalibracaoMesas[linha.numero]; _ccSalvarCalibracaoMesas(); } catch (e) {}
+            try { if (mapaGeoOverride && mapaGeoOverride[linha.numero]) { delete mapaGeoOverride[linha.numero]; _ccSalvarPosicoesMapa(); } } catch (e) {}
+          }
         }
         // Sinal vivo do celular do cliente (pedido/campainha) -- coluna
         // nova e independente da posição fixa da mesa acima.
