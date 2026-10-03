@@ -3005,10 +3005,20 @@ function ccEscutarPagamentoCliente(orderId, empresaId, mesa) {
 
 // Limpa a sessão do celular do cliente e libera a mesa pro atendente —
 // a tela do atendente atualiza sozinha (já está ouvindo a tabela "mesas").
+// Abate o saldo financeiro da mesa na nuvem (Supabase) SEM mexer no status/cor da mesa.
+function ccAbaterSaldoMesa(mesa) {
+  try {
+    const n = Number(mesa); if (!n || !isFinite(n)) return;
+    const st = mesaStatus[n] || "livre";
+    const saldo = pedidosCozinha.filter(p => Number(p.mesa) === n && p.status !== "entregue").reduce((a, p) => a + (Number(p.total) || 0), 0);
+    const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+    if (emp && typeof ccAtualizarMesaSupabase === "function") ccAtualizarMesaSupabase(emp, n, st, saldo);
+  } catch (e) { console.warn("[Saldo mesa]", e && e.message); }
+}
 function ccFecharContaCliente(mesa) {
   if (typeof S !== "undefined") { S.cart = {}; if (typeof salvar === "function") salvar("cart", S.cart); }
-  localStorage.removeItem(CC_MESA_CLIENTE_KEY);
-  if (typeof ccSetMesaStatus === "function") ccSetMesaStatus(Number(mesa), "livre", 0);
+  // Pagamento confirmado só abate o saldo: a mesa e a sessão do cliente continuam (ele pode seguir consumindo).
+  try { ccAbaterSaldoMesa(mesa); } catch (e) {}
 
   const tela = document.createElement("div");
   tela.style.cssText = "position:fixed;inset:0;background:#16a34a;color:#fff;z-index:99999;"
@@ -3016,8 +3026,8 @@ function ccFecharContaCliente(mesa) {
     + "padding:24px;font-family:sans-serif";
   tela.innerHTML =
     '<div style="font-size:4rem;margin-bottom:16px">✅</div>'
-    + '<h1 style="font-size:1.5rem;font-weight:900;margin-bottom:8px">CONTA PAGA</h1>'
-    + '<p style="font-size:.9rem;opacity:.9">Obrigado! Pode fechar essa tela.</p>'
+    + '<h1 style="font-size:1.5rem;font-weight:900;margin-bottom:8px">PAGAMENTO CONFIRMADO</h1>'
+    + '<p style="font-size:.9rem;opacity:.9">Obrigado! Pode continuar na mesa e pedir mais, se quiser.</p>'
     + '<button onclick="this.closest(\'div\').remove()" style="margin-top:20px;background:#fff;color:#16a34a;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">Fechar</button>';
   document.body.appendChild(tela);
 }
@@ -5931,8 +5941,8 @@ function confirmarPgto(metodo) {
   if(pedCoz){ pedCoz.status = "entregue"; if(!pedCoz.entregueEm) pedCoz.entregueEm = new Date().toISOString(); }
   salvar("pedidosCozinha_v1", pedidosCozinha);
 
-  // 2. Liberar mesa
-  ccSetMesaStatus(ped.mesa, "livre");
+  // 2. Pagamento só abate o saldo na nuvem — a mesa NÃO muda de cor/status (só "Liberar Mesa" manual faz isso)
+  ccAbaterSaldoMesa(ped.mesa);
 
   // 3. Registrar no caixa
   if(typeof pagamentos2 !== "undefined") {
@@ -6253,11 +6263,13 @@ let _ccMapaFrameAtual = null, _ccMapaPrimeiro = true;
 let _ccGpsWatchId = null, _ccGpsPos = null, _ccGpsPrec = null, _ccGpsTs = 0, _ccGpsErro = "", _ccGpsNegado = false;
 let _ccMapaPts = [];        // [{p, geo}] mesas com coordenada — base do recálculo de distância a cada fix
 let _ccFilaIds = [];        // mesas que pedem o garçom (pedido novo / campainha / pronto p/ entregar)
+let _ccFilaUrg = {};          // urgência por mesa (0 = Pronto/Pedido novo/Campainha no topo)
 let _ccFilaCabeca = null;   // mesa que lidera a fila (com histerese p/ não "pular" por ruído do GPS)
 const _ccMapaVistos = {};
 let _ccComandaTocando = false;            // dedo em cima da lista: congela reordenação/re-render p/ o toque não se perder
 let _ccEntConf = { n: null, ts: 0 };       // 2º toque p/ entregar pedido ainda em preparo (sem popup)
-const _ccScan = { on: false, abrindo: false, stream: null, timer: null, det: null, cv: null, cx: null, busy: false, vistos: {}, hist: [], avisoTs: 0 };
+const _ccScan = { on: false, abrindo: false, stream: null, timer: null, det: null, cv: null, cx: null, busy: false, vistos: {}, hist: [], avisoTs: 0,
+  modoFixa: (function () { try { return localStorage.getItem("cc_scan_modo_fixa") === "1"; } catch (e) { return false; } })() };
 const _ccEsc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 function _ccInjetarEstiloMapaMesas() {
@@ -6280,9 +6292,11 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-norte{position:absolute;right:8px;top:6px;font-size:.62rem;font-weight:900;color:#8a6a12}
   .cc-escala{position:absolute;left:10px;bottom:8px;font-size:.6rem;font-weight:800;color:#8a6a12}
   .cc-escala i{display:block;height:4px;border:2px solid #8a6a12;border-top:0;margin-bottom:2px}
-  .cc-puck{position:absolute;transform:translate(-50%,-50%);min-width:46px;height:46px;padding:0 8px;border-radius:23px;background:#fff;border:3px solid #94a3b8;
+  .cc-puck{position:absolute;transform:translate(-50%,-50%);min-width:46px;height:46px;padding:0 8px;border-radius:23px;background:#dcfce7;border:3px solid #16a34a;
     display:flex;align-items:center;justify-content:center;flex-direction:column;font-weight:900;font-size:.85rem;line-height:1;color:#0f2340;box-shadow:0 3px 8px rgba(0,0,0,.3);cursor:pointer;touch-action:none;user-select:none;z-index:3}
   .cc-puck small{font-size:.5rem;font-weight:800;margin-top:2px}
+  .cc-puck{width:46px;min-width:46px;max-width:46px;padding:0 1px;box-sizing:border-box}
+  .cc-puck small,.cc-puck .cc-leg{white-space:nowrap;letter-spacing:-.2px}
   .cc-puck.estim{border-style:dashed}
   .cc-puck.s{min-width:36px;height:36px;padding:0 4px;border-radius:18px;font-size:.72rem;border-width:2px}
   .cc-puck.s small{font-size:.45rem;margin-top:1px}
@@ -6291,7 +6305,7 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-puck.xs.sel small{display:block;position:absolute;top:100%;left:50%;transform:translateX(-50%);background:#0f2340;color:#fff;padding:1px 5px;border-radius:6px;font-size:.55rem;white-space:nowrap}
   .cc-canvas.g{aspect-ratio:3/4;max-height:none}
   .cc-puck.sel{outline:4px solid #0ea5e9;z-index:5}
-  .cc-p-livre{opacity:.75}.cc-p-ocupada{border-color:#ea580c;background:#fff7ed}.cc-p-pronto{border-color:#16a34a;background:#dcfce7}.cc-p-conta{border-color:#7c3aed;background:#ede9fe}
+  .cc-p-livre{background:#dcfce7;border-color:#16a34a}.cc-p-ocupada{border-color:#ea580c;background:#ffedd5}.cc-p-conta{border-color:#dc2626;background:#fee2e2}
   .cc-p-pedido{border-color:#dc2626;animation:ccBlinkRed .8s infinite}.cc-p-campainha{border-color:#f59e0b;animation:ccBlinkYellow .8s infinite}
   @keyframes ccBlinkRed{0%,100%{background:#fff;box-shadow:0 0 0 0 rgba(220,38,38,0)}50%{background:#ef4444;color:#fff;box-shadow:0 0 0 10px rgba(220,38,38,.45)}}
   @keyframes ccBlinkYellow{0%,100%{background:#fff;box-shadow:0 0 0 0 rgba(245,158,11,0)}50%{background:#fde047;box-shadow:0 0 0 10px rgba(245,158,11,.55)}}
@@ -6304,14 +6318,14 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-folha p{font-size:.72rem;color:#475569}
   .cc-btns{display:flex;flex-wrap:wrap;gap:6px}
   .cc-btns button{border:0;border-radius:10px;padding:8px 11px;font-size:.74rem;font-weight:800;color:#fff;cursor:pointer}
-  .cc-btns .e{background:#16a34a}.cc-btns .c{background:#ea580c}.cc-btns .r{background:#64748b}.cc-btns .l{background:#e2e8f0;color:#334155}.cc-btns .k{background:#f59e0b}.cc-btns .m{background:#0ea5e9}
+  .cc-btns .e{background:#16a34a}.cc-btns .c{background:#ea580c}.cc-btns .r{background:#0f2340}.cc-btns .l{background:#fff;color:#0f2340;box-shadow:inset 0 0 0 2px #0f2340}.cc-btns .lib{background:#16a34a}.cc-btns .pc{background:#dc2626}.cc-btns .k{background:#f59e0b}.cc-btns .m{background:#0ea5e9}
   .cc-leg{font-size:.62rem;font-weight:700;color:#64748b}
   .cc-puck .cc-leg{font-size:.55rem;font-weight:900;color:inherit;opacity:.85;margin-top:2px;white-space:nowrap}
   .cc-puck .cc-leg.alvo{color:#15803d;opacity:1}
   .cc-ord{position:absolute;top:-9px;right:-9px;min-width:20px;height:20px;border-radius:10px;background:#0f2340;color:#fff;font-style:normal;font-size:.62rem;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;padding:0 4px}
   .cc-garcom{z-index:6}
   .cc-fila{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-  .cc-fi{border-radius:999px;padding:5px 10px;font-size:.72rem;font-weight:900;background:#e2e8f0;color:#334155}
+  .cc-fi{border-radius:999px;padding:5px 10px;font-size:.72rem;font-weight:900;background:#ffedd5;color:#7c2d12}
   .cc-fi.prox{background:#dc2626;color:#fff}
   .cc-p-pronto{animation:ccBlinkGreen .9s infinite}
   .cc-p-preparo{border-color:#f97316;animation:ccBlinkOrange 1.1s infinite}
@@ -6320,7 +6334,8 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-coms{display:flex;flex-direction:column;gap:8px}
   .cc-coms-h{font-size:.72rem;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#ea580c}
   #cc-coms-lista{display:flex;flex-direction:column;gap:8px}
-  .cc-cm{position:relative;background:#fff;border:3px solid #cbd5e1;border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;transition:box-shadow .2s}
+  .cc-cm{position:relative;background:#fff;border:3px solid #ea580c;border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;transition:box-shadow .2s}
+  .cc-cm.conta{border-color:#dc2626}
   .cc-cm.top{border-width:4px;box-shadow:0 6px 18px rgba(15,35,64,.2)}
   .cc-cm-next{display:none;font-size:.6rem;font-weight:900;letter-spacing:.08em;color:#0ea5e9}
   .cc-cm.top .cc-cm-next{display:block}
@@ -6340,11 +6355,11 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-cm.perto .cc-cm-dist{color:#15803d}
   .cc-cm-badges{display:flex;flex-wrap:wrap;gap:5px}
   .cc-st{border-radius:999px;padding:3px 9px;font-size:.66rem;font-weight:900;color:#fff}
-  .cc-st.novo{background:#dc2626}.cc-st.camp{background:#f59e0b;color:#422006}.cc-st.prep{background:#f97316}.cc-st.pronto{background:#16a34a}.cc-st.tot{background:#e2e8f0;color:#334155}
+  .cc-st.novo{background:#dc2626}.cc-st.camp{background:#f59e0b;color:#422006}.cc-st.prep{background:#f97316}.cc-st.pronto{background:#16a34a}.cc-st.tot{background:#fef3c7;color:#78350f}
   .cc-cm-itens{font-size:.72rem;color:#475569}
   .cc-cm-btns{display:flex;gap:6px;flex-wrap:wrap}
   .cc-cm-btns button{border:0;border-radius:12px;padding:11px 14px;font-size:.82rem;font-weight:900;color:#fff;cursor:pointer;touch-action:manipulation}
-  .cc-cm-btns .e{background:#16a34a;flex:1;min-width:150px}.cc-cm-btns .k{background:#f59e0b;color:#422006;flex:1}.cc-cm-btns .m{background:#e2e8f0;color:#334155}
+  .cc-cm-btns .e{background:#16a34a;flex:1;min-width:150px}.cc-cm-btns .k{background:#f59e0b;color:#422006;flex:1}.cc-cm-btns .m{background:#fff;color:#0f2340;box-shadow:inset 0 0 0 2px #0f2340}
   .cc-cm.perto .cc-cm-btns .e{box-shadow:0 0 0 4px rgba(22,163,74,.35)}
   .cc-scan{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;padding:10px;border:2px solid #e2c98a;border-radius:16px;background:#fffbeb}
   .cc-scan-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -6450,25 +6465,51 @@ function _ccFmtDist(d) {
   if (d >= 1000) return (d / 1000).toFixed(1) + "km";
   return "~" + (Math.round(d / 5) * 5) + "m";
 }
-// Afasta pucks sobrepostos (mapa de 80 mesas): relaxamento em pixels, com mola de volta à posição real.
+// REPULSÃO VETORIAL: converte lat/lng -> px (via _ccMapaFrame) e empurra cada par de mesas em sentido
+// oposto até haver >= d px (60) de centro a centro entre QUALQUER vizinha. Se a tela não comporta todas as
+// mesas a 60 px, a altura da tela cresce (rolagem vertical) em vez de empilhar círculos. Determinístico.
+let _ccDesempCache = { k: "", v: null };         // mesmas posições = mesmo desenho (o auto-refresh de 10 s não recalcula)
 function _ccDesempilhar(its, wPx, hPx, d) {
-  const P = its.map(i => ({ p: i.p, ox: i.x * wPx / 100, oy: i.y * hPx / 100, x: i.x * wPx / 100, y: i.y * hPx / 100 }));
-  const m = d / 2 + 4;
-  for (let it = 0; it < 400; it++) {
-    for (let a = 0; a < P.length; a++) for (let b = a + 1; b < P.length; b++) {
-      let dx = P[b].x - P[a].x, dy = P[b].y - P[a].y, L = Math.hypot(dx, dy);
-      if (L >= d) continue;
-      if (L < 0.01) { const t = (a + b + 1) * 2.4; dx = Math.cos(t); dy = Math.sin(t); L = 1; }
-      const f = (d - L) / 2 / L;
-      P[a].x -= dx * f; P[a].y -= dy * f; P[b].x += dx * f; P[b].y += dy * f;
+  const n = its.length, out = {};
+  if (!n) return { pos: out, hPx: hPx };
+  const chave = Math.round(wPx) + "|" + Math.round(hPx) + "|" + d + "|" + its.map(i => i.p + ":" + i.x.toFixed(2) + "," + i.y.toFixed(2)).join(";");
+  if (_ccDesempCache.k === chave && _ccDesempCache.v) return _ccDesempCache.v;
+  const m = 30;                                   // meia largura do círculo (46 px) + folga
+  const folga = 0.05;
+  let H = Math.max(hPx, n * d * d * 0.9 / Math.max(1, wPx - 2 * m) + 2 * m), P = null, ok = false; // já parte da altura que comporta n mesas a d px
+  const minDist = Q => { let mn = Infinity; for (let a = 0; a < Q.length; a++) for (let b = a + 1; b < Q.length; b++) { const L = Math.sqrt((Q[b].x - Q[a].x) ** 2 + (Q[b].y - Q[a].y) ** 2); if (L < mn) mn = L; } return mn; };
+  for (let tent = 0; tent < 12 && !ok; tent++) {
+    P = its.map((i, k) => ({ p: i.p, ox: i.x * wPx / 100, oy: i.y * H / 100, x: i.x * wPx / 100, y: i.y * H / 100 }));
+    for (let it = 0; it < 420; it++) {
+      let moveu = false;
+      for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) {
+        let dx = P[b].x - P[a].x, dy = P[b].y - P[a].y;
+        if (dx >= d || dx <= -d || dy >= d || dy <= -d) continue;   // descarte barato antes da raiz
+        let L = Math.sqrt(dx * dx + dy * dy);
+        if (L >= d) continue;
+        if (L < 0.01) { const t = (a * 7 + b * 13 + 1) * 0.7; dx = Math.cos(t); dy = Math.sin(t); L = 1; } // coordenadas idênticas: direção determinística
+        const f = (d - L) / 2 / L;
+        P[a].x -= dx * f; P[a].y -= dy * f; P[b].x += dx * f; P[b].y += dy * f; moveu = true;
+      }
+      const mola = it < 220 ? 0.03 : 0;           // mola fraca de volta à posição real; some no fim p/ garantir o espaçamento
+      P.forEach(q => {
+        if (mola) { q.x += (q.ox - q.x) * mola; q.y += (q.oy - q.y) * mola; }
+        q.x = Math.min(wPx - m, Math.max(m, q.x)); q.y = Math.min(H - m, Math.max(m, q.y));
+      });
+      if (!moveu && it > 220) break;
     }
-    P.forEach(q => {
-      q.x += (q.ox - q.x) * 0.005; q.y += (q.oy - q.y) * 0.005;
-      q.x = Math.min(wPx - m, Math.max(m, q.x)); q.y = Math.min(hPx - m, Math.max(m, q.y));
-    });
+    ok = n < 2 || minDist(P) >= d - folga;
+    if (!ok) H *= 1.3;                            // sem espaço: alonga a tela e tenta de novo
   }
-  const out = {}; P.forEach(q => { out[q.p] = { x: q.x / wPx * 100, y: q.y / hPx * 100 }; });
-  return out;
+  if (!ok) {                                      // último recurso: grade fixa ordenada por posição (nunca sobrepõe)
+    const cols = Math.max(1, Math.floor((wPx - 2 * m) / d) + 1), ord = its.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x) || (a.p - b.p));
+    H = Math.max(hPx, m * 2 + Math.ceil(n / cols) * d);
+    const passo = cols > 1 ? (wPx - 2 * m) / (cols - 1) : 0;
+    P = ord.map((i, k) => ({ p: i.p, x: m + (k % cols) * passo, y: m + Math.floor(k / cols) * d }));
+  }
+  P.forEach(q => { out[q.p] = { x: q.x / wPx * 100, y: q.y / H * 100 }; });
+  _ccDesempCache = { k: chave, v: { pos: out, hPx: H } };
+  return _ccDesempCache.v;
 }
 function _ccGpsPosAtual() { return (_ccGpsPos && (Date.now() - _ccGpsTs) < 60000) ? _ccGpsPos : null; } // fix velho (>60s) não vale
 function _ccGpsStatusTxt() {
@@ -6510,12 +6551,16 @@ function _ccGpsGarcomIniciar(forcar) {
     { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
   );
 }
+// Urgência operacional: 0 = Pronto / Pedido novo / Campainha (topo) · 1 = em preparo · 2 = pedindo conta · 3 = demais.
+function _ccUrgencia(e) { return (e.pronto || e.novo || e.camp) ? 0 : e.prep ? 1 : e.conta ? 2 : 3; }
 function _ccFilaOrdenar(dist) {
+  const u = n => (_ccFilaUrg[n] != null ? _ccFilaUrg[n] : 9);
   const d = n => (dist[n] != null ? dist[n] : 1e12);
-  const arr = _ccFilaIds.slice().sort((a, b) => d(a) - d(b) || a - b);
+  // 1º urgência, 2º distância do garçom, 3º número da mesa
+  const arr = _ccFilaIds.slice().sort((a, b) => u(a) - u(b) || d(a) - d(b) || a - b);
   const c = _ccFilaCabeca;
-  // histerese: a cabeça só troca se a outra mesa estiver >3 m mais perto (evita o foco pular com o ruído do GPS)
-  if (c != null && arr.length > 1 && arr[0] !== c && arr.indexOf(c) >= 0 && dist[c] != null && dist[arr[0]] != null && dist[c] - dist[arr[0]] < 3) {
+  // histerese: a cabeça só troca se a outra mesa (da MESMA urgência) estiver >3 m mais perto (evita pulo por ruído do GPS)
+  if (c != null && arr.length > 1 && arr[0] !== c && arr.indexOf(c) >= 0 && u(c) === u(arr[0]) && dist[c] != null && dist[arr[0]] != null && dist[c] - dist[arr[0]] < 3) {
     arr.splice(arr.indexOf(c), 1); arr.unshift(c);
   }
   return arr;
@@ -6573,6 +6618,7 @@ function _ccMontarMapaMesasHTML() {
   for (let n = 1; n <= maxN; n++) _nums.push(n);
   let _calKeys = []; try { _calKeys = Object.keys(ccCalibracaoMesas || {}); } catch (er) {}
   [].concat(Object.keys(mapaGeoOverride || {}), Object.keys(mesaGeo || {}), _calKeys).map(Number).forEach(n => { if (n >= 1 && isFinite(n) && _nums.indexOf(n) < 0) _nums.push(n); });
+  try { pedidosCozinha.forEach(x => { const m = Number(x.mesa); if (m >= 1 && isFinite(m) && _nums.indexOf(m) < 0) _nums.push(m); }); } catch (er) {}
   _nums.sort((a, b) => a - b);
   const grupos = [];
   for (const n of _nums) {
@@ -6594,6 +6640,7 @@ function _ccMontarMapaMesasHTML() {
   const _dist = {};
   _ccMapaPts.forEach(o => { _dist[o.p] = _gps ? _ccDistM(_gps, o.geo) : null; });
   _ccFilaIds = grupos.filter(e => e.peds.length > 0 || e.camp).map(e => e.p);
+  _ccFilaUrg = {}; grupos.forEach(e => { _ccFilaUrg[e.p] = _ccUrgencia(e); });
   const fila = _ccFilaOrdenar(_dist);
   const _cabAnt = _ccFilaCabeca, _cab = fila.length ? fila[0] : null;
   if (_cab !== _cabAnt) {          // a cabeça da fila mudou (entrega concluída, pedido novo ou garçom andou >3 m)
@@ -6611,11 +6658,11 @@ function _ccMontarMapaMesasHTML() {
 
   let pucks = "", marc = "", linhas = "";
   const clamp = v => Math.min(96, Math.max(4, v));
-  const _nP = comPos.length, _grande = _nP > 30;
-  const _tam = _nP <= 12 ? "" : _nP <= 30 ? " s" : " xs", _dPx = _nP <= 12 ? 50 : _nP <= 30 ? 40 : 33;
-  const _cvEl = document.getElementById("cc-canvas");
-  const _wPx = (_cvEl && _cvEl.offsetWidth) || Math.min((window.innerWidth || 380) - 24, 700), _hPx = _wPx * (_grande ? 4 / 3 : 0.75);
-  const _desl = _ccDesempilhar(comPos.map(e => { const q = fr.toXY(e.geo || e.estim); return { p: e.p, x: clamp(q.x), y: clamp(q.y) }; }), _wPx, _hPx, _dPx);
+  const _nP = comPos.length, _tam = "", _dPx = 60;   // círculo único de 46 px, vizinhas a >= 60 px (clicável sob sol forte)
+  const _cvEl = document.getElementById("cc-canvas"), _gridEl = document.getElementById("at-mesas-grid");
+  const _wPx = Math.max(280, (_cvEl && _cvEl.clientWidth) || (_gridEl && _gridEl.clientWidth - 4) || Math.min((window.innerWidth || 380) - 24, 700));
+  const _rep = _ccDesempilhar(comPos.map(e => { const q = fr.toXY(e.geo || e.estim); return { p: e.p, x: clamp(q.x), y: clamp(q.y) }; }), _wPx, Math.max(_wPx * 0.75, 260), _dPx);
+  const _desl = _rep.pos, _hPx = _rep.hPx;
   comPos.forEach(e => {
     const pt = _desl[e.p] || fr.toXY(e.geo || e.estim);
     const cls = _ccPuckCls(e);
@@ -6661,15 +6708,15 @@ function _ccMontarMapaMesasHTML() {
     if (sel.pronto || sel.peds.length) b.push(`<button class="e" onclick="ccMapaAcao('entregue',${sel.p})">✓ Marcar Entregue</button>`);
     if (sel.conta || sel.pronto || sel.ativa) b.push(`<button class="c" onclick="abrirMaquininhaMesa(${sel.p})">💳 Cobrar</button>`);
     if (sel.ativa) b.push(`<button class="r" onclick="ccCorrigirSessaoMesa(${sel.p})">🔄 Corrigir Sessão</button>`);
-    if (sel.ativa && !sel.conta) b.push(`<button class="l" onclick="ccMapaAcao('conta',${sel.p})">💳 Pedir conta</button>`);
-    if (sel.ativa) b.push(`<button class="l" onclick="ccMapaAcao('livre',${sel.p})">🟢 Liberar</button>`);
+    if (sel.ativa && !sel.conta) b.push(`<button class="pc" onclick="ccMapaAcao('conta',${sel.p})">🔴 Pedir conta</button>`);
+    if (sel.ativa || sel.conta) b.push(`<button class="lib" id="cc-btn-liberar" onclick="ccMapaAcao('livre',${sel.p})">🟢 Liberar Mesa</button>`);
     if (sel.sinalN) {
       b.push(`<button class="m" onclick="ccMapaPuxarParaCliente(${sel.p})">📌 Mesa está aqui (usar posição do cliente)</button>`);
       b.push(`<button class="l" onclick="ccAbrirSinalClienteMesa(${sel.sinalN})">🗺️ Abrir no Maps</button>`);
     }
     if (mapaGeoOverride[sel.p]) b.push(`<button class="l" onclick="ccMapaLimparPos(${sel.p})">↺ Posição do GPS</button>`);
     folha = `<div class="cc-folha"><h5>Mesa ${rot}${sel.total ? ` · ${fmtBRL(sel.total)}` : ""}${desde ? ` · <span class="cc-timer" data-inicio="${new Date(desde).toISOString()}" data-parado="0">⏱ 00:00</span>` : ""}</h5>
-      ${sel.peds.length ? `<p>👥 <b>${sel.peds.length} pedido(s) nesta mesa:</b><br>${sel.peds.map(x => `${x.numero ? "#" + _ccEsc(x.numero) + " " : ""}${x.nome ? _ccEsc(x.nome) + " " : ""}· ${fmtBRL(Number(x.total) || 0)} · ${_ccEsc(x.status)}`).join("<br>")}</p>` : ""}${itens ? `<p>🍽️ ${itens}</p>` : ""}${gpsTxt}<div class="cc-btns">${b.join("")}</div></div>`;
+      ${sel.peds.length ? `<p>👥 <b>${sel.peds.length} pedido(s) nesta mesa:</b><br>${sel.peds.map(x => `${x.numero ? "#" + _ccEsc(x.numero) + " " : ""}${x.nome ? _ccEsc(x.nome) + " " : ""}· ${fmtBRL(Number(x.total) || 0)} · ${_ccEsc(x.status)} <button class="c" style="padding:3px 8px;font-size:.66rem" onclick="abrirMaquininha('${_ccEsc(x.id)}')">💳 Cobrar este</button>`).join("<br>")}</p>` : ""}${itens ? `<p>🍽️ ${itens}</p>` : ""}${gpsTxt}<div class="cc-btns">${b.join("")}</div></div>`;
   }
 
   return `
@@ -6683,7 +6730,7 @@ function _ccMontarMapaMesasHTML() {
     </div>
     <div class="cc-fila" id="cc-fila">${_ccFilaHTML(fila, _dist)}</div>
     ${chips ? `<div class="cc-alertas">${chips}</div>` : ""}
-    <div class="cc-canvas${_grande ? " g" : ""}${_ccMapaMover ? " mover" : ""}" id="cc-canvas">
+    <div class="cc-canvas${_ccMapaMover ? " mover" : ""}" id="cc-canvas" style="aspect-ratio:auto;max-height:none;box-sizing:border-box;height:${(_hPx + 4).toFixed(1)}px">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none">${linhas}</svg>
       <div class="cc-norte">N ↑</div>
       <div class="cc-escala"><i style="width:${fr.barra10m}%;min-width:6px"></i>10 m</div>
@@ -6782,11 +6829,33 @@ function ccMapaSeparar(p) {
   Object.keys(mapaJuncao).forEach(k => { if (Number(mapaJuncao[k]) === Number(p)) delete mapaJuncao[k]; });
   salvar("mapaJuncao", mapaJuncao); renderAtendente();
 }
+let _ccLibConf = { n: null, ts: 0 };           // 2º toque p/ liberar a mesa (sem popup)
 function ccMapaAcao(tipo, p) {
   const g = _ccGrupoMesa(p);
-  if (tipo === "entregue") g.forEach(n => ccEntregarComandaMesa(n));
-  else g.forEach(n => setMesaStatus(n, tipo));
-  if (tipo === "livre") { g.forEach(n => { delete mapaGeoOverride[n]; }); _ccSalvarPosicoesMapa(); ccMapaSeparar(p); _ccMapaSel = null; }
+  if (tipo === "entregue") { g.forEach(n => ccEntregarComandaMesa(n)); return; }
+  if (tipo === "conta") {
+    g.forEach(n => ccSetMesaStatus(n, "conta", _ccEstadoGrupo(n).total || 0));
+    if (typeof toast === "function") toast("🔴 Mesa " + String(p).padStart(2, "0") + " pedindo conta");
+    renderAtendente(); return;
+  }
+  if (tipo === "livre") {
+    // Pagamento NUNCA libera a mesa. Só este clique humano (atendente/caixa) devolve a mesa para 🟢 Livre.
+    const agora = Date.now(), abertos = pedidosCozinha.filter(x => g.includes(Number(x.mesa)) && x.status !== "entregue");
+    if (!(_ccLibConf.n === Number(p) && agora - _ccLibConf.ts < 5000)) {
+      _ccLibConf = { n: Number(p), ts: agora };
+      const b = document.getElementById("cc-btn-liberar"); if (b) b.textContent = "⚠️ Mesa vazia? Toque de novo";
+      if (typeof toast === "function") toast("👀 Confirme que a Mesa " + String(p).padStart(2, "0") + " foi desocupada" + (abertos.length ? " — há " + abertos.length + " pedido(s) ainda abertos" : "") + ". Toque de novo em Liberar Mesa.");
+      return;
+    }
+    _ccLibConf = { n: null, ts: 0 };
+    if (abertos.length) { const iso = new Date().toISOString(); abertos.forEach(x => { x.status = "entregue"; if (!x.entregueEm) x.entregueEm = iso; }); salvar("pedidosCozinha_v1", pedidosCozinha); }
+    g.forEach(n => ccSetMesaStatus(n, "livre", 0));   // upsert no Supabase -> WebSocket mesas-<empresa> -> todos os celulares viram VERDE
+    g.forEach(n => { delete mapaGeoOverride[n]; }); _ccSalvarPosicoesMapa(); ccMapaSeparar(p); _ccMapaSel = null;
+    if (typeof toast === "function") toast("🟢 Mesa " + String(p).padStart(2, "0") + " liberada");
+    renderAtendente(); return;
+  }
+  g.forEach(n => ccSetMesaStatus(n, tipo));
+  renderAtendente();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -6827,7 +6896,7 @@ function _ccComandaCardHTML(e, idx, d) {
   const btn = e.peds.length
     ? '<button class="e" data-act="ent" onclick="ccEntregarComandaMesa(' + e.p + ')">✓ Marcar Entregue</button>'
     : '<button class="k" data-act="ent" onclick="ccEntregarComandaMesa(' + e.p + ')">🔔 Atendida</button>';
-  return '<div class="cc-cm ' + st + (idx === 0 ? " top" : "") + (perto ? " perto" : "") + '" data-mesa="' + e.p + '">'
+  return '<div class="cc-cm ' + st + (e.conta ? " conta" : "") + (idx === 0 ? " top" : "") + (perto ? " perto" : "") + '" data-mesa="' + e.p + '">'
     + '<div class="cc-cm-next">▶ PRÓXIMA PARADA</div>'
     + '<div class="cc-cm-row"><span class="cc-cm-rank">' + (idx + 1) + 'º</span>'
     + '<span class="cc-cm-nome">Mesa ' + rot + '</span>'
@@ -6844,7 +6913,7 @@ function _ccComandasHTML(grupos, fila, dist) {
   const cards = fila.map((n, i) => (mapa[n] ? _ccComandaCardHTML(mapa[n], i, dist[n]) : "")).join("");
   return '<div class="cc-coms" id="cc-comandas"'
     + ' onpointerdown="_ccComandaTocando=true" onpointerup="setTimeout(function(){_ccComandaTocando=false},350)" onpointercancel="_ccComandaTocando=false">'
-    + '<div class="cc-coms-h">🧭 Comandas por proximidade</div>'
+    + '<div class="cc-coms-h">🧭 Comandas por urgência (Pronto / Pedido novo no topo)</div>'
     + '<div id="cc-coms-lista">' + (cards || '<span class="cc-leg">✅ Nenhuma comanda ativa — fila limpa</span>') + '</div></div>';
 }
 
@@ -6922,6 +6991,7 @@ function _ccScanGarantirHost() {
     host.innerHTML =
       '<div class="cc-scan-bar">'
       + '<button id="cc-scan-btn" onclick="ccScanAlternar()">📷 Calibrar mesas pelo QR</button>'
+      + '<button id="cc-scan-modo" onclick="ccScanAlternarModo()">' + (_ccScan.modoFixa ? "🏠 Salão fixo" : "🏖️ Areia") + '</button>'
       + '<span id="cc-scan-info" class="cc-scan-info">Câmera desligada</span></div>'
       + '<div id="cc-scan-box" hidden>'
       + '<div class="cc-scan-vwrap"><video id="cc-scan-video" playsinline muted autoplay></video>'
@@ -6962,6 +7032,12 @@ function _ccScanCarregarJsQR() {
   });
 }
 
+function ccScanAlternarModo() {
+  _ccScan.modoFixa = !_ccScan.modoFixa;
+  try { localStorage.setItem("cc_scan_modo_fixa", _ccScan.modoFixa ? "1" : "0"); } catch (e) {}
+  const b = document.getElementById("cc-scan-modo"); if (b) b.textContent = _ccScan.modoFixa ? "🏠 Salão fixo" : "🏖️ Areia";
+  _ccScanMsg(_ccScan.modoFixa ? "🏠 Modo Salão fixo: mesa lida fica gravada para sempre." : "🏖️ Modo Areia: a posição vale para hoje e é refeita a cada ronda.", "ok");
+}
 async function ccScanAlternar() { if (_ccScan.on) ccScanFechar(); else await ccScanAbrir(); }
 
 async function ccScanAbrir() {
@@ -7082,10 +7158,18 @@ function _ccScanPos() {
 
 async function _ccScanCalibrar(n) {
   const rot = String(n).padStart(2, "0");
+  _ccScan.vistos = _ccScan.vistos || {};
   const liberar = function (esperaMs) { _ccScan.vistos[n] = Date.now() - 6000 + (esperaMs || 0); }; // permite nova tentativa
   try {
+    // Mesa FIXA do salão já calibrada vale para sempre: o scanner só confirma e segue (sem regravar, sem janela).
+    const temPos = !!(mesaGeo[n] || (ccCalibracaoMesas[n] && isFinite(ccCalibracaoMesas[n].lat)));
+    if (ccMesaEhFixa(n) && temPos) {
+      _ccScan.vistos[n] = Date.now() + 8000;
+      _ccScanMsg("🏠 Mesa " + rot + " fixa do salão — já calibrada. Próxima!", "ok");
+      return;
+    }
     _ccScanMsg("📡 Mesa " + rot + " — fixando posição…");
-    const pos = await _ccScanPos();
+    const pos = await _ccScanPos(); // getCurrentPosition em segundo plano (ou o fix ao vivo de até 3 s do watcher)
     if (!pos || !isFinite(pos.lat) || !isFinite(pos.lng) || (pos.lat === 0 && pos.lng === 0) || Math.abs(pos.lat) > 90 || Math.abs(pos.lng) > 180) {
       liberar(2000); _ccScanMsg("⚠️ Mesa " + rot + ": sem GPS válido. Vá para céu aberto — tentando de novo…", "err"); return;
     }
@@ -7094,25 +7178,30 @@ async function _ccScanCalibrar(n) {
     }
     const antes = ccCalibracaoMesas[n] || mesaGeo[n] || null;
     const moveu = (antes && isFinite(antes.lat) && isFinite(antes.lng)) ? _ccDistM(antes, pos) : null;
+    const fixa = ccMesaEhFixa(n) || !!_ccScan.modoFixa;
+    const areaAnt = (ccCalibracaoMesas[n] && ccCalibracaoMesas[n].area) || ccAreaDaMesaRegistrada(n) || "";
     ccCalibracaoMesas[n] = {
       lat: pos.lat, lng: pos.lng, prec: pos.prec,
       setor: (ccCalibracaoMesas[n] && ccCalibracaoMesas[n].setor) || "",
-      area: _ccAreaSelecionada() || (ccCalibracaoMesas[n] && ccCalibracaoMesas[n].area) || "", ts: Date.now()
+      area: fixa ? "Salão" : ((areaAnt && !/sal[ãa]o/i.test(areaAnt)) ? areaAnt : "Praia"), fixa: fixa, ts: Date.now()
     };
+    ccDefinirFixa(n, fixa);
     _ccSalvarCalibracaoMesas();
     _ccAreaGravar(n, ccCalibracaoMesas[n].area);
     mesaGeo[n] = { lat: pos.lat, lng: pos.lng };
+    if (fixa) ccPersistirFixasGeo();
     if (mapaGeoOverride && mapaGeoOverride[n]) { delete mapaGeoOverride[n]; _ccSalvarPosicoesMapa(); } // novo escaneamento = nova verdade física
-    Promise.resolve(ccGravarGeoMesa(n, pos.lat, pos.lng)).catch(function (e) { console.warn("[Scanner] publicar mesa:", e && e.message); });
+    // Grava na nuvem agora: o canal realtime mesas-<empresa> desenha esta mesa nas telas de toda a brigada, sem F5.
+    Promise.resolve(ccGravarGeoMesa(n, pos.lat, pos.lng, fixa)).catch(function (e) { console.warn("[Scanner] publicar mesa:", e && e.message); });
     _ccScan.hist.unshift({ n: n, prec: pos.prec, moveu: (moveu != null && moveu >= 2) ? moveu : null });
     if (_ccScan.hist.length > 6) _ccScan.hist.length = 6;
     _ccScanLogHTML();
-    _ccScanMsg("✅ Mesa " + rot + " fixada (±" + Math.round(pos.prec) + "m) — câmera segue ativa, próxima mesa!", "ok");
+    _ccScanMsg("✅ Mesa " + rot + (fixa ? " (fixa)" : "") + " fixada (±" + Math.round(pos.prec) + "m) — câmera segue ativa, próxima mesa!", "ok");
     _ccMapaBip();
     const fl = document.getElementById("cc-scan-flash");
     if (fl) { fl.classList.add("on"); setTimeout(function () { fl.classList.remove("on"); }, 600); }
     if (typeof _ccRenderListaCalibracao === "function") _ccRenderListaCalibracao();
-    if (typeof renderAtendente === "function") renderAtendente(); // o círculo da mesa nasce no mapa na posição real
+    _ccAgendarRenderAtendente(); // o círculo nasce no mapa sem rolar a página
   } catch (er) {
     liberar(2000);
     console.warn("[Scanner] calibrar:", er && er.message);
@@ -12261,9 +12350,7 @@ window._gestorCancelar = function(id, canal) {
     toast(`❌ Pedido ${ped.mesa} cancelado`);
     // Liberar mesa se era o único pedido
     const outroPed = pedidosCozinha.find((p,i) => i!==idx && p.mesa===ped.mesa && p.status!=="entregue");
-    if(!outroPed && ped.mesa && !String(ped.mesa).startsWith("🛵")) {
-      ccSetMesaStatus(ped.mesa, "livre");
-    }
+    // (cancelar pedido não libera a mesa: só o botão manual "Liberar Mesa")
     if (typeof window.ccCozTombstone === "function") window.ccCozTombstone(id);
     pedidosCozinha.splice(idx, 1);
     salvar("pedidosCozinha_v1", pedidosCozinha);
@@ -13474,7 +13561,7 @@ function ccEscutarConfirmacaoPagamento(orderId, empresaId, ped, opcoes) {
           // DIFERENCIAL 1 — divisão parcial: só reduz o saldo da mesa
           // depois que o backend confirmou de verdade, nunca por URL.
           const restante = Math.max(0, Number(opcoes.valorTotalAtual) - Number(opcoes.valorParaCobrar));
-          await ccAtualizarMesaSupabase(empresaId, ped.mesa, restante > 0 ? "ocupada" : "livre", restante);
+          await ccAtualizarMesaSupabase(empresaId, ped.mesa, (mesaStatus[ped.mesa] && mesaStatus[ped.mesa] !== "livre") ? mesaStatus[ped.mesa] : "ocupada", restante); // abate saldo; status mantido
           toast(`✅ Pago R$ ${Number(opcoes.valorParaCobrar).toFixed(2)} da Mesa ${ped.mesa} — restam R$ ${restante.toFixed(2)}`);
         } else {
           confirmarPgto(metodo); // reaproveita a função já existente — libera mesa, baixa estoque, registra caixa
@@ -13573,12 +13660,58 @@ async function ccAtualizarMesaSupabase(empresaId, numeroMesa, status, total) {
 // (não a cada pedido -- a mesa não anda, só muda de lugar de um dia
 // pro outro). Some quando a mesa fecha, porque no dia seguinte pode
 // estar armada em outro canto da praia/salão.
-async function ccGravarGeoMesa(numero, lat, lng) {
+// Mesa FIXA (true = madeira do salão coberto, calibrada uma vez na vida) x AREIA (false = muda todo dia com a maré).
+let _ccSemColunaFixa = false;
+function ccMesaEhFixa(n) {
+  const k = String(parseInt(n, 10));
+  if (k === "NaN") return false;
+  try { if (config.mesasFixas && typeof config.mesasFixas[k] === "boolean") return config.mesasFixas[k]; } catch (e) {}
+  try { const c = ccCalibracaoMesas && ccCalibracaoMesas[k]; if (c && typeof c.fixa === "boolean") return c.fixa; } catch (e) {}
+  try { return /sal[ãa]o/i.test((config.areasMesas && config.areasMesas[k]) || ""); } catch (e) { return false; }
+}
+function ccDefinirFixa(n, fixa) {
+  const k = String(parseInt(n, 10));
+  if (k === "NaN") return;
+  try {
+    if (!config.mesasFixas || typeof config.mesasFixas !== "object") config.mesasFixas = {};
+    if (config.mesasFixas[k] !== !!fixa) { config.mesasFixas[k] = !!fixa; salvar("config", config); } // config é sincronizado entre aparelhos
+  } catch (e) {}
+}
+function ccNumerosFixos() {
+  const set = {};
+  [mesaGeo, ccCalibracaoMesas, config.mesasFixas || {}, config.areasMesas || {}].forEach(o => { try { Object.keys(o).forEach(k => { if (ccMesaEhFixa(k)) set[Number(k)] = 1; }); } catch (e) {} });
+  return Object.keys(set).map(Number).filter(isFinite);
+}
+// As fixas ficam salvas neste aparelho: a brigada abre o app já com o salão desenhado, mesmo sem rede.
+function ccPersistirFixasGeo() { try { const o = {}; Object.keys(mesaGeo).forEach(k => { if (mesaGeo[k] && ccMesaEhFixa(k)) o[k] = mesaGeo[k]; }); salvar("mesasFixasGeo", o); } catch (e) {} }
+function ccRestaurarFixasGeo() { try { const o = carregar("mesasFixasGeo", {}); Object.keys(o).forEach(k => { if (!mesaGeo[k] && o[k] && isFinite(o[k].lat) && isFinite(o[k].lng)) mesaGeo[k] = o[k]; }); } catch (e) {} }
+
+async function ccGravarGeoMesa(numero, lat, lng, fixa) {
   const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA;
   if (!empresaId) return;
-  await ccEscreverComResiliencia("mesas",
-    { empresa_id: empresaId, numero: Number(numero), latitude: lat, longitude: lng },
-    "empresa_id,numero");
+  const base = { empresa_id: empresaId, numero: Number(numero), latitude: lat, longitude: lng };
+  if (typeof fixa !== "boolean" && lat != null) fixa = ccMesaEhFixa(numero);
+  if (typeof fixa === "boolean" && !_ccSemColunaFixa) {
+    const comFixa = Object.assign({}, base, { fixa: fixa });
+    if (!navigator.onLine) { await ccEscreverComResiliencia("mesas", comFixa, "empresa_id,numero"); return; }
+    try {
+      const { error } = await ccGetSupabaseClient().from("mesas").upsert(comFixa, { onConflict: "empresa_id,numero" });
+      if (!error) return;
+      if (/fixa/i.test(error.message || "")) _ccSemColunaFixa = true; // migração ainda não rodou: segue sem a coluna
+    } catch (e) { if (/fixa/i.test((e && e.message) || "")) _ccSemColunaFixa = true; }
+  }
+  await ccEscreverComResiliencia("mesas", base, "empresa_id,numero");
+}
+// Re-render do mapa agrupado (vários sinais seguidos viram 1 desenho) sem pular a rolagem da página.
+let _ccRenderTimer = null;
+function _ccAgendarRenderAtendente() {
+  if (_ccRenderTimer) return;
+  _ccRenderTimer = setTimeout(function () {
+    _ccRenderTimer = null;
+    if (typeof S === "undefined" || S.viewAtual !== "atendente" || typeof renderAtendente !== "function") return;
+    if (_ccMapaArrastando || _ccComandaTocando) { _ccAgendarRenderAtendente(); return; }
+    const y = window.scrollY; renderAtendente(); if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);
+  }, 150);
 }
 function ccCapturarGeoMesa(numero) {
   if (!navigator.geolocation) return;
@@ -13586,7 +13719,7 @@ function ccCapturarGeoMesa(numero) {
     function (pos) {
       const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       mesaGeo[numero] = coords;
-      ccGravarGeoMesa(numero, coords.lat, coords.lng);
+      ccGravarGeoMesa(numero, coords.lat, coords.lng, ccMesaEhFixa(numero));
       if (typeof renderAtendente === "function" && typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente();
     },
     function (err) { console.warn("[Geo mesa] não capturou posição:", err.message); },
@@ -13694,6 +13827,8 @@ function ccCalibrarPosicaoMesa() {
         area: _ccAreaSelecionada() || (ccCalibracaoMesas[num] ? ccCalibracaoMesas[num].area : "") || "",
         ts: Date.now()
       };
+      ccCalibracaoMesas[num].fixa = /sal[ãa]o/i.test(ccCalibracaoMesas[num].area || "");
+      ccDefinirFixa(num, ccCalibracaoMesas[num].fixa);
       _ccSalvarCalibracaoMesas();
       _ccAreaGravar(num, ccCalibracaoMesas[num].area);
       if (btn) { btn.disabled = false; btn.textContent = "📍 Salvar Posição Aqui"; }
@@ -13716,7 +13851,7 @@ function ccCalibrarPosicaoMesa() {
 function ccApagarCalibracaoMesa(num) {
   delete ccCalibracaoMesas[num];
   _ccSalvarCalibracaoMesas();
-  try { if (config.areasMesas) { delete config.areasMesas[String(num)]; salvar("config", config); } } catch (e) {}
+  try { if (config.areasMesas) delete config.areasMesas[String(num)]; if (config.mesasFixas) delete config.mesasFixas[String(num)]; salvar("config", config); } catch (e) {}
   delete mesaGeo[Number(num)];
   try { ccGravarGeoMesa(num, null, null); } catch (e) {}
   _ccRenderListaCalibracao();
@@ -13740,10 +13875,12 @@ function _ccRenderListaCalibracao() {
 // Escaneio do QR da mesa: agora é o scanner CONTÍNUO da aba Atendente (ccScanAbrir) — a câmera
 // continua aberta depois de cada mesa salva. Este atalho só leva o usuário até lá.
 function ccEscanearQRMesaCalibracao() {
+  // Sem popup, sem confirmação e sem rolagem: abre (ou mantém aberto) o leitor contínuo da aba Atendente.
+  // Cada QR lido (?mesa=N) dispara o GPS em segundo plano, grava na nuvem e a câmera continua ativa.
   try {
     if (typeof S !== "undefined" && S.viewAtual !== "atendente") showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
   } catch (e) {}
-  ccScanAbrir();
+  return ccScanAbrir();
 }
 
 function _injetarPainelCalibracaoMesas(hostId) {
@@ -13778,7 +13915,7 @@ function _injetarPainelCalibracaoMesas(hostId) {
     <div id="cal-mesa-lista" style="margin-top:14px"></div>
     ${hostId ? "" : `<div style="margin-top:16px;padding:12px;border:2px dashed #dc2626;border-radius:12px;background:#fef2f2">
       <p class="text-xs font-bold" style="color:#991b1b;margin-bottom:8px">Ferramenta de testes — apaga TODAS as posições (latitude/longitude) das mesas na nuvem e em todos os aparelhos conectados.</p>
-      <button id="cal-zerar-nuvem-btn" onclick="ccZerarPosicoesNuvem()" style="width:100%;padding:12px;border:none;border-radius:10px;background:#dc2626;color:#fff;font-weight:900;font-size:.8rem;cursor:pointer">⚠️ ZERAR POSIÇÕES DA NUVEM</button>
+      <button id="cal-zerar-nuvem-btn" onclick="ccZerarPosicoesNuvem()" style="width:100%;padding:12px;border:none;border-radius:10px;background:#dc2626;color:#fff;font-weight:900;font-size:.8rem;cursor:pointer">⚠️ ZERAR MAPA DE LOCALIZAÇÃO</button>
       <p id="cal-zerar-nuvem-msg" style="font-size:.7rem;margin-top:8px;color:#7f1d1d"></p>
     </div>`}`;
   if (ancora && ancora.parentElement === adminEl) adminEl.insertBefore(panel, ancora.nextSibling);
@@ -13806,7 +13943,7 @@ async function ccPublicarCalibracoesPendentes() {
     for (const n of nums) {
       const c = ccCalibracaoMesas[n];
       if (!c || !isFinite(c.lat) || !isFinite(c.lng) || (c.lat === 0 && c.lng === 0)) continue;
-      if (config.posicoesResetEm && (Number(c.ts) || 0) <= config.posicoesResetEm) { delete ccCalibracaoMesas[n]; _ccSalvarCalibracaoMesas(); continue; } // anterior ao reset
+      if (config.posicoesResetEm && !ccMesaEhFixa(n) && (Number(c.ts) || 0) <= config.posicoesResetEm) { delete ccCalibracaoMesas[n]; _ccSalvarCalibracaoMesas(); continue; } // anterior ao reset
       mesaGeo[Number(n)] = { lat: c.lat, lng: c.lng };
       await ccGravarGeoMesa(n, c.lat, c.lng);
     }
@@ -13830,7 +13967,7 @@ function ccFecharRadarMesa() {}
 let _ccCanalReset = null, _ccCanalResetProm = null, _ccCanalResetEmp = null;
 function ccLimparPosicoesLocal() {
   [ccCalibracaoMesas, mesaGeo, mesaGeoCliente, mapaGeoOverride, _ccMesasSinalTipo].forEach(function (o) {
-    try { Object.keys(o).forEach(function (k) { delete o[k]; }); } catch (e) {}
+    try { Object.keys(o).forEach(function (k) { if (!ccMesaEhFixa(k)) delete o[k]; }); } catch (e) {} // mesas fixas do salão ficam intocadas
   });
   try { _ccSalvarCalibracaoMesas(); } catch (e) {}
   try { _ccSalvarPosicoesMapa(); } catch (e) {}
@@ -13846,7 +13983,7 @@ function ccAplicarResetRecebido(PayloadTempoReal) {
     if (!PayloadTempoReal || PayloadTempoReal.emp !== window.COOKCONTROL_EMPRESA_ID_ATIVA) return;
     config.posicoesResetEm = PayloadTempoReal.ts; // marca: calibrações antigas deste aparelho não são republicadas
     ccLimparPosicoesLocal();
-    if (typeof toast === "function") toast("📍 Posições das mesas zeradas pelo administrador.");
+    if (typeof toast === "function") toast("📍 Mapa da areia zerado pelo administrador (mesas fixas do salão mantidas).");
   } catch (e) { console.warn("[Reset posições] aplicar:", e && e.message); }
 }
 function _ccCanalResetObter(emp) {
@@ -13877,13 +14014,21 @@ async function ccZerarPosicoesNuvem() {
   const say = function (t) { if (msg) msg.textContent = t; try { toast(t); } catch (e) {} };
   if (!emp) { say("⚠️ Dispositivo sem empresa ativa — leia o QR do gerente antes."); return; }
   if (!navigator.onLine) { say("⚠️ Sem internet: nada foi apagado."); return; }
-  if (!confirm("Apagar TODAS as posições das mesas na nuvem e em todos os celulares conectados?\n\nStatus e pedidos das mesas NÃO são apagados.")) return;
+  if (!confirm("Apagar as posições das mesas da AREIA (fixa = false) na nuvem e em todos os celulares conectados?\n\nAs mesas fixas do salão, o status e os pedidos NÃO são apagados.")) return;
   if ((prompt('Para confirmar, digite ZERAR') || "").trim().toUpperCase() !== "ZERAR") { say("Cancelado."); return; }
   if (btn) { btn.disabled = true; btn.textContent = "⏳ Apagando na nuvem…"; }
   try {
-    const sb = ccGetSupabaseClient();
-    let r = await sb.from("mesas").update({ latitude: null, longitude: null, gps_cliente_lat: null, gps_cliente_lng: null, sinal_tipo: null }).eq("empresa_id", emp).select("numero");
-    if (r.error) r = await sb.from("mesas").update({ latitude: null, longitude: null }).eq("empresa_id", emp).select("numero"); // banco sem as colunas novas
+    const sb = ccGetSupabaseClient(), _fixas = ccNumerosFixos();
+    const completo = { latitude: null, longitude: null, gps_cliente_lat: null, gps_cliente_lng: null, sinal_tipo: null }, basico = { latitude: null, longitude: null };
+    // UPDATE (não DELETE) limpando coordenadas EXCLUSIVAMENTE onde fixa é false/nula; fixa = true nunca é tocada.
+    const _upd = function (campos, viaColuna) {
+      let q = sb.from("mesas").update(campos).eq("empresa_id", emp);
+      q = viaColuna ? q.or("fixa.is.null,fixa.eq.false") : (_fixas.length ? q.not("numero", "in", "(" + _fixas.join(",") + ")") : q);
+      return q.select("numero");
+    };
+    let r = await _upd(completo, true);
+    if (r.error) r = await _upd(basico, true);                                   // banco sem as colunas do sinal do cliente
+    if (r.error) { r = await _upd(completo, false); if (r.error) r = await _upd(basico, false); } // banco sem a coluna 'fixa': protege pelas fixas conhecidas
     if (r.error) throw new Error(r.error.message || "falha no Supabase");
     const n = Array.isArray(r.data) ? r.data.length : 0;
     const PayloadTempoReal = { emp: emp, ts: Date.now(), origem: "admin" };
@@ -13891,11 +14036,11 @@ async function ccZerarPosicoesNuvem() {
     ccLimparPosicoesLocal(); // zera ccCalibracaoMesas, mesaGeo, mesaGeoCliente e ajustes do dono neste aparelho
     const ok = await _ccCanalResetObter(emp);
     if (ok && _ccCanalReset) await _ccCanalReset.send({ type: "broadcast", event: "zerar_posicoes", payload: PayloadTempoReal });
-    say("✅ " + n + " mesa(s) zerada(s) na nuvem." + (ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
+    say("✅ " + n + " mesa(s) da areia zerada(s) na nuvem (fixas do salão intactas)." + (ok ? " Mapa limpo em todos os celulares online." : " ⚠️ Canal ao vivo indisponível: os outros celulares limpam ao receber a atualização do banco ou ao recarregar."));
   } catch (e) {
     say("❌ Nada foi alterado: " + (e && e.message ? e.message : e));
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "⚠️ ZERAR POSIÇÕES DA NUVEM"; }
+    if (btn) { btn.disabled = false; btn.textContent = "⚠️ ZERAR MAPA DE LOCALIZAÇÃO"; }
   }
 }
 
@@ -13985,6 +14130,8 @@ function ccSetMesaStatus(numero, status, total) {
     if (_calMesa && isFinite(_calMesa.lat) && isFinite(_calMesa.lng)) {
       // Mesa calibrada: a posição fixa PERMANECE no servidor e no mapa.
       mesaGeo[numero] = { lat: _calMesa.lat, lng: _calMesa.lng };
+    } else if (ccMesaEhFixa(numero) && mesaGeo[numero]) {
+      // Mesa fixa do salão (madeira): calibrada uma vez na vida, nunca é apagada ao liberar.
     } else {
       delete mesaGeo[numero];
       ccGravarGeoMesa(numero, null, null); // sem calibração: limpa no servidor -- amanhã a mesa pode estar em outro lugar
@@ -14001,8 +14148,8 @@ function ccSetMesaStatus(numero, status, total) {
   } else if (mesaGeoDia[numero] !== hoje) {
     mesaGeoDia[numero] = hoje;
     salvar("mesaGeoDia", mesaGeoDia);
-    // Posição calibrada manda; só captura o GPS do celular se a mesa NÃO foi calibrada.
-    if (!((typeof ccCalibracaoMesas !== "undefined") && ccCalibracaoMesas[numero])) ccCapturarGeoMesa(numero);
+    // A posição da mesa vem SÓ do QR escaneado pelo atendente (número da mesa). Nenhum celular de cliente/garçom
+    // grava a posição da mesa sozinho ao mudar de status — isso empilhava mesas no mapa.
   }
 }
 
@@ -14037,13 +14184,15 @@ async function ccIniciarEscutaMesasRealtime() {
     // banco ainda não tiver essas colunas (migração não rodada ainda),
     // cai pro select antigo -- nunca deixa o pull de status/posição da
     // mesa (que já funcionava) parar de funcionar por causa disso.
-    let { data, error } = await sb.from("mesas").select("numero,status,latitude,longitude,gps_cliente_lat,gps_cliente_lng,sinal_tipo").eq("empresa_id", empresaId);
+    ccRestaurarFixasGeo(); // fixas do salão já desenhadas no boot, antes mesmo da rede responder
+    let { data, error } = await sb.from("mesas").select("numero,status,latitude,longitude,gps_cliente_lat,gps_cliente_lng,sinal_tipo,fixa").eq("empresa_id", empresaId);
+    if (error) ({ data, error } = await sb.from("mesas").select("numero,status,latitude,longitude,gps_cliente_lat,gps_cliente_lng,sinal_tipo").eq("empresa_id", empresaId));
     if (error) {
       ({ data, error } = await sb.from("mesas").select("numero,status,latitude,longitude").eq("empresa_id", empresaId));
     }
     if (!error && Array.isArray(data)) {
       data.forEach(linha => {
-        const statusLocal = linha.status === "pronto_entrega" ? "conta"
+        const statusLocal = (linha.status === "pronto_entrega" || linha.status === "pedindo_conta") ? "conta"
           : linha.status === "chamando_garcom" ? "ocupada"
           : linha.status;
         if (statusLocal) mesaStatus[linha.numero] = statusLocal;
@@ -14053,7 +14202,10 @@ async function ccIniciarEscutaMesasRealtime() {
           ? { lat: linha.gps_cliente_lat, lng: linha.gps_cliente_lng } : null;
         if (linha.sinal_tipo) _ccMesasSinalTipo[linha.numero] = linha.sinal_tipo;
         else delete _ccMesasSinalTipo[linha.numero];
+        if (linha.fixa === true) ccDefinirFixa(linha.numero, true);
+        else if (typeof linha.fixa === "boolean" && ccMesaEhFixa(linha.numero) && linha.latitude != null) ccGravarGeoMesa(linha.numero, linha.latitude, linha.longitude, true); // servidor ainda com fixa=false: corrige
       });
+      ccPersistirFixasGeo();
       salvar("mesaStatus", mesaStatus);
       if (typeof S !== "undefined" && S.viewAtual === "atendente" && typeof renderAtendente === "function") renderAtendente();
     }
@@ -14081,7 +14233,7 @@ async function ccIniciarEscutaMesasRealtime() {
 
         // Traduz os 4 estados pedidos para os 3 que o sistema local já usa,
         // sem quebrar a lógica existente de mesaStatus/renderAtendente:
-        const statusLocal = linha.status === "pronto_entrega" ? "conta"
+        const statusLocal = (linha.status === "pronto_entrega" || linha.status === "pedindo_conta") ? "conta"
           : linha.status === "chamando_garcom" ? "ocupada"
           : linha.status;
         mesaStatus[linha.numero] = statusLocal;
@@ -14100,7 +14252,8 @@ async function ccIniciarEscutaMesasRealtime() {
         }
         if (linha.sinal_tipo) _ccMesasSinalTipo[linha.numero] = linha.sinal_tipo;
         else if ("sinal_tipo" in linha) delete _ccMesasSinalTipo[linha.numero];
-        if (typeof renderAtendente === "function" && S.viewAtual === "atendente") renderAtendente();
+        if (linha.fixa === true) { ccDefinirFixa(linha.numero, true); ccPersistirFixasGeo(); }
+        _ccAgendarRenderAtendente(); // posição nova de qualquer atendente aparece na hora em todas as telas, sem F5
         if (typeof renderMesaGrid === "function" && S.viewAtual === "mesas") renderMesaGrid();
       }
     )
@@ -14208,7 +14361,7 @@ function ccNotificarNovoPedidoBalcao(pedido) {
 async function ccMarcarFilaBalcaoComoPago(filaId, numeroMesa) {
   const sb = ccGetSupabaseClient();
   await sb.from("fila_balcao").update({ status_pagamento: "pago" }).eq("id", filaId);
-  await ccAtualizarMesaSupabase(window.COOKCONTROL_EMPRESA_ID_ATIVA, numeroMesa, "livre", 0);
+  await ccAtualizarMesaSupabase(window.COOKCONTROL_EMPRESA_ID_ATIVA, numeroMesa, (mesaStatus[numeroMesa] && mesaStatus[numeroMesa] !== "livre") ? mesaStatus[numeroMesa] : "ocupada", 0); // saldo zerado, mesa continua ocupada até "Liberar Mesa"
   toast(`✅ Mesa ${numeroMesa} — pagamento do balcão confirmado`);
 }
 
@@ -15481,10 +15634,8 @@ function _ccEncerrarMesaComRecibo(total, itens, formaPagamento) {
 
   // Encerra a sessão atual da mesa (o total já fica registrado no Resumo
   // Diário / Faturamento do Admin via `historico`, que nunca é apagado) e
-  // libera a mesa para o próximo cliente.
-  mesaSessaoInicio[S.mesa] = new Date().toISOString();
-  salvar("mesaSessaoInicio", mesaSessaoInicio);
-  ccSetMesaStatus(S.mesa, "livre");
+  // mantém a mesa até a liberação manual.
+  ccAbaterSaldoMesa(S.mesa); // só abate o saldo: a mesa segue Ocupada/Pedindo conta até alguém tocar em "Liberar Mesa"
 
   const ov = document.getElementById("cc-luz-verde-ov");
   if (ov) ov.classList.add("show");
@@ -15808,58 +15959,25 @@ function ccDetectarMesaViaQRAtendente() {
 }
 
 // ─── EQUIPE + QR DE MESA ────────────────────────────────────────────────
-// 1º escaneamento (mesa sem posição) = POSICIONAR a mesa.
-// Mesa já posicionada = o garçom escolhe: FAZER O PEDIDO da mesa (faz as vezes do cliente)
-// ou ATUALIZAR a posição. Nunca abre o cardápio do cliente sozinho.
-function ccEquipePosicionarMesa(num, opts) {
+// Aparelho da equipe que abre ?mesa=N (câmera nativa): lê o número, dispara o GPS em segundo plano e grava a
+// posição na nuvem. NENHUMA janela de escolha, NENHUMA confirmação e NENHUMA rolagem automática. O leitor
+// contínuo é reaberto para a próxima mesa (se o navegador exigir um toque, o aviso aparece na própria barra).
+// Fazer o pedido da mesa continua disponível em "🍽️ Lançar pedido" na folha da mesa no mapa.
+function ccEquipePosicionarMesa(num) {
   num = parseInt(num, 10);
   if (!num) return;
-  const semNavegar = !!(opts && opts.semNavegar);
-  if (!semNavegar) {
-    showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
-    if (typeof _injetarPainelCalibracaoMesas === "function") _injetarPainelCalibracaoMesas("view-atendente");
-  }
-  const cal = document.getElementById("cal-mesa-sel");
-  if (cal) cal.value = String(num);
-  const sel = document.getElementById("kg-mesa-select");
-  if (sel) sel.value = String(num);
-  if (!semNavegar) {
-    const alvo = document.getElementById("painel-calibracao-mesas") || document.getElementById("atend-quilo-box");
-    if (alvo && alvo.scrollIntoView) alvo.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  toast(`📍 Mesa ${String(num).padStart(2, "0")} selecionada — fique ao lado dela e toque em "Salvar Posição Aqui".`);
+  try { _ccScanGarantirHost(); } catch (e) {}
+  return _ccScanCalibrar(num);
 }
 
 function ccEquipeEscolherAcaoMesa(num, opts) {
   num = parseInt(num, 10);
   if (!num) return;
   const semNavegar = !!(opts && opts.semNavegar);
-  if (!semNavegar) showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]'));
-  const cal = (typeof ccCalibracaoMesas !== "undefined") ? ccCalibracaoMesas[num] : null;
-  const temPos = !!(cal || (typeof mesaGeo !== "undefined" && mesaGeo[num]));
-  if (!temPos) { ccEquipePosicionarMesa(num, opts); return; }
-
-  const rot = String(num).padStart(2, "0");
-  const posHoje = !!(cal && cal.ts && new Date(cal.ts).toDateString() === new Date().toDateString());
-  const quando = cal && cal.ts
-    ? (posHoje ? "posicionada hoje" : "posição de " + new Date(cal.ts).toLocaleDateString("pt-BR"))
-    : "posição já registrada";
-  const antigo = document.getElementById("cc-equipe-escolha-mesa");
-  if (antigo) antigo.remove();
-  const ov = document.createElement("div");
-  ov.id = "cc-equipe-escolha-mesa";
-  ov.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(15,35,64,.72);display:flex;align-items:center;justify-content:center;padding:18px";
-  const bPedido = '<button id="cc-eq-pedido" style="width:100%;padding:15px;border:none;border-radius:14px;background:#ea580c;color:#fff;font-weight:900;font-size:1rem;margin-bottom:10px">🍽️ Fazer o pedido da Mesa ' + rot + '</button>';
-  const bPos = '<button id="cc-eq-pos" style="width:100%;padding:13px;border:2px solid #0f2340;border-radius:14px;background:#fff;color:#0f2340;font-weight:800;font-size:.9rem;margin-bottom:10px">📍 ' + (posHoje ? "Atualizar" : "Salvar") + ' posição desta mesa</button>';
-  ov.innerHTML = '<div style="background:#fff;border-radius:20px;padding:22px;max-width:360px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.4)">'
-    + '<p style="font-weight:900;font-size:1.15rem;color:#0f2340;margin-bottom:2px">Mesa ' + rot + '</p>'
-    + '<p style="font-size:.78rem;color:#6b7280;margin-bottom:16px">' + quando + ' · o que você quer fazer?</p>'
-    + (posHoje ? bPedido + bPos : bPos + bPedido)
-    + '<button id="cc-eq-cancela" style="width:100%;padding:10px;border:none;background:none;color:#6b7280;font-weight:700;font-size:.8rem">Cancelar</button></div>';
-  document.body.appendChild(ov);
-  document.getElementById("cc-eq-pedido").onclick = function () { ov.remove(); ccAtendenteLancarPedidoMesa(num); };
-  document.getElementById("cc-eq-pos").onclick = function () { ov.remove(); ccEquipePosicionarMesa(num, opts); };
-  document.getElementById("cc-eq-cancela").onclick = function () { ov.remove(); };
+  try { if (!semNavegar && typeof S !== "undefined" && S.viewAtual !== "atendente") showView("atendente", document.querySelector('.nav-tab[data-view="atendente"]')); } catch (e) {}
+  const antigo = document.getElementById("cc-equipe-escolha-mesa"); if (antigo) antigo.remove(); // resíduo da janela antiga
+  ccEquipePosicionarMesa(num);
+  if (!_ccScan.on && !_ccScan.abrindo) { try { Promise.resolve(ccScanAbrir()).catch(function () {}); } catch (e) {} }
 }
 
 // Garçom faz as vezes do cliente: abre o cardápio JÁ na mesa N (pedido atribuído ao atendente do turno).
@@ -21466,7 +21584,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       linhas.forEach(function (l) {
         if (l.latitude == null || l.longitude == null) return;
         pontos.push([l.latitude, l.longitude]);
-        var status = l.status === "pronto_entrega" ? "conta" : (l.status === "chamando_garcom" ? "ocupada" : (l.status || "livre"));
+        var status = (l.status === "pronto_entrega" || l.status === "pedindo_conta") ? "conta" : (l.status === "chamando_garcom" ? "ocupada" : (l.status || "livre"));
         var icone = iconePara(status);
         if (marcadores[l.numero]) {
           marcadores[l.numero].setLatLng([l.latitude, l.longitude]).setIcon(icone);
