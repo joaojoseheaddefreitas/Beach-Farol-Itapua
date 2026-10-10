@@ -1,5 +1,123 @@
 <!DOCTYPE html>
 <html lang="pt-BR"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<script id="cc-parede-prelock">
+/* PAREDE DE ACESSO (camada 0) — roda ANTES de qualquer outro script.
+   1) Traduz os atalhos de URL (?cliente=true, ?atendente=true, ?motoboy=true, ?delivery=true) para o
+      parâmetro ?role= que o SirAccess já entende; NÃO mexe no motor de mesas/QR/mapa.
+   2) ?mesa=N / ?cliente=true em aparelho que NÃO é da equipe SEMPRE vira role=cliente — sobrescreve qualquer
+      &role=dono / &role=admin que alguém tente anexar ao link.
+   3) Sem parâmetro de perfil (acesso de Proprietário): esconde a tela até o PIN ser validado. */
+(function () {
+  try {
+    var u = new URL(location.href), q = u.searchParams;
+    var flag = function (k) { var v = (q.get(k) || '').toLowerCase(); return v === 'true' || v === '1'; };
+    var j = function (k) { try { var v = localStorage.getItem('solbahia_' + k); return v === null ? null : JSON.parse(v); } catch (e) { return null; } };
+    var r = null; try { r = localStorage.getItem('solbahia_sir_role'); } catch (e) {}
+    var equipe = j('perfilAtendenteAtivo') === true || !!j('turnoAtivo') ||
+      ['atendente', 'gerente', 'dono', 'admin', 'caixa', 'cozinheiro', 'motoboy'].indexOf(r) >= 0;
+    var mesa = q.get('mesa'), mudou = false;
+    var set = function (k, v) { if (q.get(k) !== v) { q.set(k, v); mudou = true; } };
+    if (mesa || flag('cliente')) {
+      if (!mesa || !equipe) set('role', 'cliente');
+    } else if (flag('motoboy') || flag('delivery')) {
+      set('role', 'motoboy');
+    } else if (flag('atendente')) {
+      set('role', 'atendente');
+    }
+    if (mudou) history.replaceState(null, '', u.pathname + '?' + q.toString() + u.hash);
+
+    var role = q.get('role');
+    var rolesLivres = ['cliente', 'atendente', 'motoboy', 'cozinheiro'];
+    var semPerfilNaUrl = !mesa && !flag('cliente') && (!role || rolesLivres.indexOf(role) < 0);
+    var hashRole = (location.hash || '').replace('#', '');
+    if (semPerfilNaUrl && !(hashRole && rolesLivres.indexOf(hashRole) >= 0)) {
+      var ate = parseInt(localStorage.getItem('solbahia_pin_dono_ok_ate') || '0', 10);
+      if (!(ate > Date.now())) {
+        var st = document.createElement('style');
+        st.id = 'cc-prelock';
+        st.textContent = 'body>*:not(#cc-pin-dono){visibility:hidden!important}';
+        document.head.appendChild(st);
+        /* rede de segurança contra travar o app se o script da parede falhar */
+        setTimeout(function () { var s = document.getElementById('cc-prelock'); if (s && !window.__ccParedeOk) s.remove(); }, 8000);
+      }
+    }
+  } catch (e) {}
+})();
+</script>
+<script id="cc-qrcode-inline">
+/* qrcode-generator 2.0.4 — MIT — © Kazuhiko Arase — embutido para funcionar offline (sem CDN) */
+(function(){
+// Copyright (c) 2009 Kazuhiko Arase
+var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],f={},c=function(t,r){o=function(t){for(var r=new Array(t),e=0;e<t;e+=1){r[e]=new Array(t);for(var n=0;n<t;n+=1)r[e][n]=null}return r}(i=4*e+17),l(0,0),l(i-7,0),l(0,i-7),s(),h(),d(t,r),e>=7&&v(t),null==a&&(a=p(e,n,u)),w(a,r)},l=function(t,r){for(var e=-1;e<=7;e+=1)if(!(t+e<=-1||i<=t+e))for(var n=-1;n<=7;n+=1)r+n<=-1||i<=r+n||(o[t+e][r+n]=0<=e&&e<=6&&(0==n||6==n)||0<=n&&n<=6&&(0==e||6==e)||2<=e&&e<=4&&2<=n&&n<=4)},h=function(){for(var t=8;t<i-8;t+=1)null==o[t][6]&&(o[t][6]=t%2==0);for(var r=8;r<i-8;r+=1)null==o[6][r]&&(o[6][r]=r%2==0)},s=function(){for(var t=B.getPatternPosition(e),r=0;r<t.length;r+=1)for(var n=0;n<t.length;n+=1){var i=t[r],a=t[n];if(null==o[i][a])for(var u=-2;u<=2;u+=1)for(var f=-2;f<=2;f+=1)o[i+u][a+f]=-2==u||2==u||-2==f||2==f||0==u&&0==f}},v=function(t){for(var r=B.getBCHTypeNumber(e),n=0;n<18;n+=1){var a=!t&&1==(r>>n&1);o[Math.floor(n/3)][n%3+i-8-3]=a}for(n=0;n<18;n+=1){a=!t&&1==(r>>n&1);o[n%3+i-8-3][Math.floor(n/3)]=a}},d=function(t,r){for(var e=n<<3|r,a=B.getBCHTypeInfo(e),u=0;u<15;u+=1){var f=!t&&1==(a>>u&1);u<6?o[u][8]=f:u<8?o[u+1][8]=f:o[i-15+u][8]=f}for(u=0;u<15;u+=1){f=!t&&1==(a>>u&1);u<8?o[8][i-u-1]=f:u<9?o[8][15-u-1+1]=f:o[8][15-u-1]=f}o[i-8][8]=!t},w=function(t,r){for(var e=-1,n=i-1,a=7,u=0,f=B.getMaskFunction(r),c=i-1;c>0;c-=2)for(6==c&&(c-=1);;){for(var g=0;g<2;g+=1)if(null==o[n][c-g]){var l=!1;u<t.length&&(l=1==(t[u]>>>a&1)),f(n,c-g)&&(l=!l),o[n][c-g]=l,-1==(a-=1)&&(u+=1,a=7)}if((n+=e)<0||i<=n){n-=e,e=-e;break}}},p=function(t,r,e){for(var n=A.getRSBlocks(t,r),o=b(),i=0;i<e.length;i+=1){var a=e[i];o.put(a.getMode(),4),o.put(a.getLength(),B.getLengthInBits(a.getMode(),t)),a.write(o)}var u=0;for(i=0;i<n.length;i+=1)u+=n[i].dataCount;if(o.getLengthInBits()>8*u)throw"code length overflow. ("+o.getLengthInBits()+">"+8*u+")";for(o.getLengthInBits()+4<=8*u&&o.put(0,4);o.getLengthInBits()%8!=0;)o.putBit(!1);for(;!(o.getLengthInBits()>=8*u||(o.put(236,8),o.getLengthInBits()>=8*u));)o.put(17,8);return function(t,r){for(var e=0,n=0,o=0,i=new Array(r.length),a=new Array(r.length),u=0;u<r.length;u+=1){var f=r[u].dataCount,c=r[u].totalCount-f;n=Math.max(n,f),o=Math.max(o,c),i[u]=new Array(f);for(var g=0;g<i[u].length;g+=1)i[u][g]=255&t.getBuffer()[g+e];e+=f;var l=B.getErrorCorrectPolynomial(c),h=k(i[u],l.getLength()-1).mod(l);for(a[u]=new Array(l.getLength()-1),g=0;g<a[u].length;g+=1){var s=g+h.getLength()-a[u].length;a[u][g]=s>=0?h.getAt(s):0}}var v=0;for(g=0;g<r.length;g+=1)v+=r[g].totalCount;var d=new Array(v),w=0;for(g=0;g<n;g+=1)for(u=0;u<r.length;u+=1)g<i[u].length&&(d[w]=i[u][g],w+=1);for(g=0;g<o;g+=1)for(u=0;u<r.length;u+=1)g<a[u].length&&(d[w]=a[u][g],w+=1);return d}(o,n)};f.addData=function(t,r){var e=null;switch(r=r||"Byte"){case"Numeric":e=M(t);break;case"Alphanumeric":e=x(t);break;case"Byte":e=m(t);break;case"Kanji":e=L(t);break;default:throw"mode:"+r}u.push(e),a=null},f.isDark=function(t,r){if(t<0||i<=t||r<0||i<=r)throw t+","+r;return o[t][r]},f.getModuleCount=function(){return i},f.make=function(){if(e<1){for(var t=1;t<40;t++){for(var r=A.getRSBlocks(t,n),o=b(),i=0;i<u.length;i++){var a=u[i];o.put(a.getMode(),4),o.put(a.getLength(),B.getLengthInBits(a.getMode(),t)),a.write(o)}var g=0;for(i=0;i<r.length;i++)g+=r[i].dataCount;if(o.getLengthInBits()<=8*g)break}e=t}c(!1,function(){for(var t=0,r=0,e=0;e<8;e+=1){c(!0,e);var n=B.getLostPoint(f);(0==e||t>n)&&(t=n,r=e)}return r}())},f.createTableTag=function(t,r){t=t||2;var e="";e+='<table style="',e+=" border-width: 0px; border-style: none;",e+=" border-collapse: collapse;",e+=" padding: 0px; margin: "+(r=void 0===r?4*t:r)+"px;",e+='">',e+="<tbody>";for(var n=0;n<f.getModuleCount();n+=1){e+="<tr>";for(var o=0;o<f.getModuleCount();o+=1)e+='<td style="',e+=" border-width: 0px; border-style: none;",e+=" border-collapse: collapse;",e+=" padding: 0px; margin: 0px;",e+=" width: "+t+"px;",e+=" height: "+t+"px;",e+=" background-color: ",e+=f.isDark(n,o)?"#000000":"#ffffff",e+=";",e+='"/>';e+="</tr>"}return e+="</tbody>",e+="</table>"},f.createSvgTag=function(t,r,e,n){var o={};"object"==typeof arguments[0]&&(t=(o=arguments[0]).cellSize,r=o.margin,e=o.alt,n=o.title),t=t||2,r=void 0===r?4*t:r,(e="string"==typeof e?{text:e}:e||{}).text=e.text||null,e.id=e.text?e.id||"qrcode-description":null,(n="string"==typeof n?{text:n}:n||{}).text=n.text||null,n.id=n.text?n.id||"qrcode-title":null;var i,a,u,c,g=f.getModuleCount()*t+2*r,l="";for(c="l"+t+",0 0,"+t+" -"+t+",0 0,-"+t+"z ",l+='<svg version="1.1" xmlns="http://www.w3.org/2000/svg"',l+=o.scalable?"":' width="'+g+'px" height="'+g+'px"',l+=' viewBox="0 0 '+g+" "+g+'" ',l+=' preserveAspectRatio="xMinYMin meet"',l+=n.text||e.text?' role="img" aria-labelledby="'+y([n.id,e.id].join(" ").trim())+'"':"",l+=">",l+=n.text?'<title id="'+y(n.id)+'">'+y(n.text)+"</title>":"",l+=e.text?'<description id="'+y(e.id)+'">'+y(e.text)+"</description>":"",l+='<rect width="100%" height="100%" fill="white" cx="0" cy="0"/>',l+='<path d="',a=0;a<f.getModuleCount();a+=1)for(u=a*t+r,i=0;i<f.getModuleCount();i+=1)f.isDark(a,i)&&(l+="M"+(i*t+r)+","+u+c);return l+='" stroke="transparent" fill="black"/>',l+="</svg>"},f.createDataURL=function(t,r){t=t||2,r=void 0===r?4*t:r;var e=f.getModuleCount()*t+2*r,n=r,o=e-r;return I(e,e,function(r,e){if(n<=r&&r<o&&n<=e&&e<o){var i=Math.floor((r-n)/t),a=Math.floor((e-n)/t);return f.isDark(a,i)?0:1}return 1})},f.createImgTag=function(t,r,e){t=t||2,r=void 0===r?4*t:r;var n=f.getModuleCount()*t+2*r,o="";return o+="<img",o+=' src="',o+=f.createDataURL(t,r),o+='"',o+=' width="',o+=n,o+='"',o+=' height="',o+=n,o+='"',e&&(o+=' alt="',o+=y(e),o+='"'),o+="/>"};var y=function(t){for(var r="",e=0;e<t.length;e+=1){var n=t.charAt(e);switch(n){case"<":r+="&lt;";break;case">":r+="&gt;";break;case"&":r+="&amp;";break;case'"':r+="&quot;";break;default:r+=n}}return r};return f.createASCII=function(t,r){if((t=t||1)<2)return function(t){t=void 0===t?2:t;var r,e,n,o,i,a=1*f.getModuleCount()+2*t,u=t,c=a-t,g={"██":"█","█ ":"▀"," █":"▄","  ":" "},l={"██":"▀","█ ":"▀"," █":" ","  ":" "},h="";for(r=0;r<a;r+=2){for(n=Math.floor((r-u)/1),o=Math.floor((r+1-u)/1),e=0;e<a;e+=1)i="█",u<=e&&e<c&&u<=r&&r<c&&f.isDark(n,Math.floor((e-u)/1))&&(i=" "),u<=e&&e<c&&u<=r+1&&r+1<c&&f.isDark(o,Math.floor((e-u)/1))?i+=" ":i+="█",h+=t<1&&r+1>=c?l[i]:g[i];h+="\n"}return a%2&&t>0?h.substring(0,h.length-a-1)+Array(a+1).join("▀"):h.substring(0,h.length-1)}(r);t-=1,r=void 0===r?2*t:r;var e,n,o,i,a=f.getModuleCount()*t+2*r,u=r,c=a-r,g=Array(t+1).join("██"),l=Array(t+1).join("  "),h="",s="";for(e=0;e<a;e+=1){for(o=Math.floor((e-u)/t),s="",n=0;n<a;n+=1)i=1,u<=n&&n<c&&u<=e&&e<c&&f.isDark(o,Math.floor((n-u)/t))&&(i=0),s+=i?g:l;for(o=0;o<t;o+=1)h+=s+"\n"}return h.substring(0,h.length-1)},f.renderTo2dContext=function(t,r){r=r||2;for(var e=f.getModuleCount(),n=0;n<e;n++)for(var o=0;o<e;o++)t.fillStyle=f.isDark(n,o)?"black":"white",t.fillRect(o*r,n*r,r,r)},f};t.stringToBytes=(t.stringToBytesFuncs={default:function(t){for(var r=[],e=0;e<t.length;e+=1){var n=t.charCodeAt(e);r.push(255&n)}return r}}).default,t.createStringToBytes=function(t,r){var e=function(){for(var e=S(t),n=function(){var t=e.read();if(-1==t)throw"eof";return t},o=0,i={};;){var a=e.read();if(-1==a)break;var u=n(),f=n()<<8|n();i[String.fromCharCode(a<<8|u)]=f,o+=1}if(o!=r)throw o+" != "+r;return i}(),n="?".charCodeAt(0);return function(t){for(var r=[],o=0;o<t.length;o+=1){var i=t.charCodeAt(o);if(i<128)r.push(i);else{var a=e[t.charAt(o)];"number"==typeof a?(255&a)==a?r.push(a):(r.push(a>>>8),r.push(255&a)):r.push(n)}}return r}};var r,e,n,o,i,a=1,u=2,f=4,c=8,g={L:1,M:0,Q:3,H:2},l=0,h=1,s=2,v=3,d=4,w=5,p=6,y=7,B=(r=[[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],[6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],[6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114],[6,34,62,90,118],[6,26,50,74,98,122],[6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],[6,30,58,86,114,142],[6,34,62,90,118,146],[6,30,54,78,102,126,150],[6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],[6,26,54,82,110,138,166],[6,30,58,86,114,142,170]],e=1335,n=7973,i=function(t){for(var r=0;0!=t;)r+=1,t>>>=1;return r},(o={}).getBCHTypeInfo=function(t){for(var r=t<<10;i(r)-i(e)>=0;)r^=e<<i(r)-i(e);return 21522^(t<<10|r)},o.getBCHTypeNumber=function(t){for(var r=t<<12;i(r)-i(n)>=0;)r^=n<<i(r)-i(n);return t<<12|r},o.getPatternPosition=function(t){return r[t-1]},o.getMaskFunction=function(t){switch(t){case l:return function(t,r){return(t+r)%2==0};case h:return function(t,r){return t%2==0};case s:return function(t,r){return r%3==0};case v:return function(t,r){return(t+r)%3==0};case d:return function(t,r){return(Math.floor(t/2)+Math.floor(r/3))%2==0};case w:return function(t,r){return t*r%2+t*r%3==0};case p:return function(t,r){return(t*r%2+t*r%3)%2==0};case y:return function(t,r){return(t*r%3+(t+r)%2)%2==0};default:throw"bad maskPattern:"+t}},o.getErrorCorrectPolynomial=function(t){for(var r=k([1],0),e=0;e<t;e+=1)r=r.multiply(k([1,C.gexp(e)],0));return r},o.getLengthInBits=function(t,r){if(1<=r&&r<10)switch(t){case a:return 10;case u:return 9;case f:case c:return 8;default:throw"mode:"+t}else if(r<27)switch(t){case a:return 12;case u:return 11;case f:return 16;case c:return 10;default:throw"mode:"+t}else{if(!(r<41))throw"type:"+r;switch(t){case a:return 14;case u:return 13;case f:return 16;case c:return 12;default:throw"mode:"+t}}},o.getLostPoint=function(t){for(var r=t.getModuleCount(),e=0,n=0;n<r;n+=1)for(var o=0;o<r;o+=1){for(var i=0,a=t.isDark(n,o),u=-1;u<=1;u+=1)if(!(n+u<0||r<=n+u))for(var f=-1;f<=1;f+=1)o+f<0||r<=o+f||0==u&&0==f||a==t.isDark(n+u,o+f)&&(i+=1);i>5&&(e+=3+i-5)}for(n=0;n<r-1;n+=1)for(o=0;o<r-1;o+=1){var c=0;t.isDark(n,o)&&(c+=1),t.isDark(n+1,o)&&(c+=1),t.isDark(n,o+1)&&(c+=1),t.isDark(n+1,o+1)&&(c+=1),0!=c&&4!=c||(e+=3)}for(n=0;n<r;n+=1)for(o=0;o<r-6;o+=1)t.isDark(n,o)&&!t.isDark(n,o+1)&&t.isDark(n,o+2)&&t.isDark(n,o+3)&&t.isDark(n,o+4)&&!t.isDark(n,o+5)&&t.isDark(n,o+6)&&(e+=40);for(o=0;o<r;o+=1)for(n=0;n<r-6;n+=1)t.isDark(n,o)&&!t.isDark(n+1,o)&&t.isDark(n+2,o)&&t.isDark(n+3,o)&&t.isDark(n+4,o)&&!t.isDark(n+5,o)&&t.isDark(n+6,o)&&(e+=40);var g=0;for(o=0;o<r;o+=1)for(n=0;n<r;n+=1)t.isDark(n,o)&&(g+=1);return e+=Math.abs(100*g/r/r-50)/5*10},o),C=function(){for(var t=new Array(256),r=new Array(256),e=0;e<8;e+=1)t[e]=1<<e;for(e=8;e<256;e+=1)t[e]=t[e-4]^t[e-5]^t[e-6]^t[e-8];for(e=0;e<255;e+=1)r[t[e]]=e;var n={glog:function(t){if(t<1)throw"glog("+t+")";return r[t]},gexp:function(r){for(;r<0;)r+=255;for(;r>=256;)r-=255;return t[r]}};return n}();function k(t,r){if(void 0===t.length)throw t.length+"/"+r;var e=function(){for(var e=0;e<t.length&&0==t[e];)e+=1;for(var n=new Array(t.length-e+r),o=0;o<t.length-e;o+=1)n[o]=t[o+e];return n}(),n={getAt:function(t){return e[t]},getLength:function(){return e.length},multiply:function(t){for(var r=new Array(n.getLength()+t.getLength()-1),e=0;e<n.getLength();e+=1)for(var o=0;o<t.getLength();o+=1)r[e+o]^=C.gexp(C.glog(n.getAt(e))+C.glog(t.getAt(o)));return k(r,0)},mod:function(t){if(n.getLength()-t.getLength()<0)return n;for(var r=C.glog(n.getAt(0))-C.glog(t.getAt(0)),e=new Array(n.getLength()),o=0;o<n.getLength();o+=1)e[o]=n.getAt(o);for(o=0;o<t.getLength();o+=1)e[o]^=C.gexp(C.glog(t.getAt(o))+r);return k(e,0).mod(t)}};return n}var A=function(){var t=[[1,26,19],[1,26,16],[1,26,13],[1,26,9],[1,44,34],[1,44,28],[1,44,22],[1,44,16],[1,70,55],[1,70,44],[2,35,17],[2,35,13],[1,100,80],[2,50,32],[2,50,24],[4,25,9],[1,134,108],[2,67,43],[2,33,15,2,34,16],[2,33,11,2,34,12],[2,86,68],[4,43,27],[4,43,19],[4,43,15],[2,98,78],[4,49,31],[2,32,14,4,33,15],[4,39,13,1,40,14],[2,121,97],[2,60,38,2,61,39],[4,40,18,2,41,19],[4,40,14,2,41,15],[2,146,116],[3,58,36,2,59,37],[4,36,16,4,37,17],[4,36,12,4,37,13],[2,86,68,2,87,69],[4,69,43,1,70,44],[6,43,19,2,44,20],[6,43,15,2,44,16],[4,101,81],[1,80,50,4,81,51],[4,50,22,4,51,23],[3,36,12,8,37,13],[2,116,92,2,117,93],[6,58,36,2,59,37],[4,46,20,6,47,21],[7,42,14,4,43,15],[4,133,107],[8,59,37,1,60,38],[8,44,20,4,45,21],[12,33,11,4,34,12],[3,145,115,1,146,116],[4,64,40,5,65,41],[11,36,16,5,37,17],[11,36,12,5,37,13],[5,109,87,1,110,88],[5,65,41,5,66,42],[5,54,24,7,55,25],[11,36,12,7,37,13],[5,122,98,1,123,99],[7,73,45,3,74,46],[15,43,19,2,44,20],[3,45,15,13,46,16],[1,135,107,5,136,108],[10,74,46,1,75,47],[1,50,22,15,51,23],[2,42,14,17,43,15],[5,150,120,1,151,121],[9,69,43,4,70,44],[17,50,22,1,51,23],[2,42,14,19,43,15],[3,141,113,4,142,114],[3,70,44,11,71,45],[17,47,21,4,48,22],[9,39,13,16,40,14],[3,135,107,5,136,108],[3,67,41,13,68,42],[15,54,24,5,55,25],[15,43,15,10,44,16],[4,144,116,4,145,117],[17,68,42],[17,50,22,6,51,23],[19,46,16,6,47,17],[2,139,111,7,140,112],[17,74,46],[7,54,24,16,55,25],[34,37,13],[4,151,121,5,152,122],[4,75,47,14,76,48],[11,54,24,14,55,25],[16,45,15,14,46,16],[6,147,117,4,148,118],[6,73,45,14,74,46],[11,54,24,16,55,25],[30,46,16,2,47,17],[8,132,106,4,133,107],[8,75,47,13,76,48],[7,54,24,22,55,25],[22,45,15,13,46,16],[10,142,114,2,143,115],[19,74,46,4,75,47],[28,50,22,6,51,23],[33,46,16,4,47,17],[8,152,122,4,153,123],[22,73,45,3,74,46],[8,53,23,26,54,24],[12,45,15,28,46,16],[3,147,117,10,148,118],[3,73,45,23,74,46],[4,54,24,31,55,25],[11,45,15,31,46,16],[7,146,116,7,147,117],[21,73,45,7,74,46],[1,53,23,37,54,24],[19,45,15,26,46,16],[5,145,115,10,146,116],[19,75,47,10,76,48],[15,54,24,25,55,25],[23,45,15,25,46,16],[13,145,115,3,146,116],[2,74,46,29,75,47],[42,54,24,1,55,25],[23,45,15,28,46,16],[17,145,115],[10,74,46,23,75,47],[10,54,24,35,55,25],[19,45,15,35,46,16],[17,145,115,1,146,116],[14,74,46,21,75,47],[29,54,24,19,55,25],[11,45,15,46,46,16],[13,145,115,6,146,116],[14,74,46,23,75,47],[44,54,24,7,55,25],[59,46,16,1,47,17],[12,151,121,7,152,122],[12,75,47,26,76,48],[39,54,24,14,55,25],[22,45,15,41,46,16],[6,151,121,14,152,122],[6,75,47,34,76,48],[46,54,24,10,55,25],[2,45,15,64,46,16],[17,152,122,4,153,123],[29,74,46,14,75,47],[49,54,24,10,55,25],[24,45,15,46,46,16],[4,152,122,18,153,123],[13,74,46,32,75,47],[48,54,24,14,55,25],[42,45,15,32,46,16],[20,147,117,4,148,118],[40,75,47,7,76,48],[43,54,24,22,55,25],[10,45,15,67,46,16],[19,148,118,6,149,119],[18,75,47,31,76,48],[34,54,24,34,55,25],[20,45,15,61,46,16]],r=function(t,r){var e={};return e.totalCount=t,e.dataCount=r,e},e={};return e.getRSBlocks=function(e,n){var o=function(r,e){switch(e){case g.L:return t[4*(r-1)+0];case g.M:return t[4*(r-1)+1];case g.Q:return t[4*(r-1)+2];case g.H:return t[4*(r-1)+3];default:return}}(e,n);if(void 0===o)throw"bad rs block @ typeNumber:"+e+"/errorCorrectionLevel:"+n;for(var i=o.length/3,a=[],u=0;u<i;u+=1)for(var f=o[3*u+0],c=o[3*u+1],l=o[3*u+2],h=0;h<f;h+=1)a.push(r(c,l));return a},e}(),b=function(){var t=[],r=0,e={getBuffer:function(){return t},getAt:function(r){var e=Math.floor(r/8);return 1==(t[e]>>>7-r%8&1)},put:function(t,r){for(var n=0;n<r;n+=1)e.putBit(1==(t>>>r-n-1&1))},getLengthInBits:function(){return r},putBit:function(e){var n=Math.floor(r/8);t.length<=n&&t.push(0),e&&(t[n]|=128>>>r%8),r+=1}};return e},M=function(t){var r=a,e=t,n={getMode:function(){return r},getLength:function(t){return e.length},write:function(t){for(var r=e,n=0;n+2<r.length;)t.put(o(r.substring(n,n+3)),10),n+=3;n<r.length&&(r.length-n==1?t.put(o(r.substring(n,n+1)),4):r.length-n==2&&t.put(o(r.substring(n,n+2)),7))}},o=function(t){for(var r=0,e=0;e<t.length;e+=1)r=10*r+i(t.charAt(e));return r},i=function(t){if("0"<=t&&t<="9")return t.charCodeAt(0)-"0".charCodeAt(0);throw"illegal char :"+t};return n},x=function(t){var r=u,e=t,n={getMode:function(){return r},getLength:function(t){return e.length},write:function(t){for(var r=e,n=0;n+1<r.length;)t.put(45*o(r.charAt(n))+o(r.charAt(n+1)),11),n+=2;n<r.length&&t.put(o(r.charAt(n)),6)}},o=function(t){if("0"<=t&&t<="9")return t.charCodeAt(0)-"0".charCodeAt(0);if("A"<=t&&t<="Z")return t.charCodeAt(0)-"A".charCodeAt(0)+10;switch(t){case" ":return 36;case"$":return 37;case"%":return 38;case"*":return 39;case"+":return 40;case"-":return 41;case".":return 42;case"/":return 43;case":":return 44;default:throw"illegal char :"+t}};return n},m=function(r){var e=f,n=t.stringToBytes(r),o={getMode:function(){return e},getLength:function(t){return n.length},write:function(t){for(var r=0;r<n.length;r+=1)t.put(n[r],8)}};return o},L=function(r){var e=c,n=t.stringToBytesFuncs.SJIS;if(!n)throw"sjis not supported.";!function(){var t=n("友");if(2!=t.length||38726!=(t[0]<<8|t[1]))throw"sjis not supported."}();var o=n(r),i={getMode:function(){return e},getLength:function(t){return~~(o.length/2)},write:function(t){for(var r=o,e=0;e+1<r.length;){var n=(255&r[e])<<8|255&r[e+1];if(33088<=n&&n<=40956)n-=33088;else{if(!(57408<=n&&n<=60351))throw"illegal char at "+(e+1)+"/"+n;n-=49472}n=192*(n>>>8&255)+(255&n),t.put(n,13),e+=2}if(e<r.length)throw"illegal char at "+(e+1)}};return i},D=function(){var t=[],r={writeByte:function(r){t.push(255&r)},writeShort:function(t){r.writeByte(t),r.writeByte(t>>>8)},writeBytes:function(t,e,n){e=e||0,n=n||t.length;for(var o=0;o<n;o+=1)r.writeByte(t[o+e])},writeString:function(t){for(var e=0;e<t.length;e+=1)r.writeByte(t.charCodeAt(e))},toByteArray:function(){return t},toString:function(){var r="";r+="[";for(var e=0;e<t.length;e+=1)e>0&&(r+=","),r+=t[e];return r+="]"}};return r},S=function(t){var r=t,e=0,n=0,o=0,i={read:function(){for(;o<8;){if(e>=r.length){if(0==o)return-1;throw"unexpected end of file./"+o}var t=r.charAt(e);if(e+=1,"="==t)return o=0,-1;t.match(/^\s$/)||(n=n<<6|a(t.charCodeAt(0)),o+=6)}var i=n>>>o-8&255;return o-=8,i}},a=function(t){if(65<=t&&t<=90)return t-65;if(97<=t&&t<=122)return t-97+26;if(48<=t&&t<=57)return t-48+52;if(43==t)return 62;if(47==t)return 63;throw"c:"+t};return i},I=function(t,r,e){for(var n=function(t,r){var e=t,n=r,o=new Array(t*r),i={setPixel:function(t,r,n){o[r*e+t]=n},write:function(t){t.writeString("GIF87a"),t.writeShort(e),t.writeShort(n),t.writeByte(128),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(255),t.writeByte(255),t.writeByte(255),t.writeString(","),t.writeShort(0),t.writeShort(0),t.writeShort(e),t.writeShort(n),t.writeByte(0);var r=a(2);t.writeByte(2);for(var o=0;r.length-o>255;)t.writeByte(255),t.writeBytes(r,o,255),o+=255;t.writeByte(r.length-o),t.writeBytes(r,o,r.length-o),t.writeByte(0),t.writeString(";")}},a=function(t){for(var r=1<<t,e=1+(1<<t),n=t+1,i=u(),a=0;a<r;a+=1)i.add(String.fromCharCode(a));i.add(String.fromCharCode(r)),i.add(String.fromCharCode(e));var f,c,g,l=D(),h=(f=l,c=0,g=0,{write:function(t,r){if(t>>>r!=0)throw"length over";for(;c+r>=8;)f.writeByte(255&(t<<c|g)),r-=8-c,t>>>=8-c,g=0,c=0;g|=t<<c,c+=r},flush:function(){c>0&&f.writeByte(g)}});h.write(r,n);var s=0,v=String.fromCharCode(o[s]);for(s+=1;s<o.length;){var d=String.fromCharCode(o[s]);s+=1,i.contains(v+d)?v+=d:(h.write(i.indexOf(v),n),i.size()<4095&&(i.size()==1<<n&&(n+=1),i.add(v+d)),v=d)}return h.write(i.indexOf(v),n),h.write(e,n),h.flush(),l.toByteArray()},u=function(){var t={},r=0,e={add:function(n){if(e.contains(n))throw"dup key:"+n;t[n]=r,r+=1},size:function(){return r},indexOf:function(r){return t[r]},contains:function(r){return void 0!==t[r]}};return e};return i}(t,r),o=0;o<r;o+=1)for(var i=0;i<t;i+=1)n.setPixel(i,o,e(i,o));var a=D();n.write(a);for(var u=function(){var t=0,r=0,e=0,n="",o={},i=function(t){n+=String.fromCharCode(a(63&t))},a=function(t){if(t<0);else{if(t<26)return 65+t;if(t<52)return t-26+97;if(t<62)return t-52+48;if(62==t)return 43;if(63==t)return 47}throw"n:"+t};return o.writeByte=function(n){for(t=t<<8|255&n,r+=8,e+=1;r>=6;)i(t>>>r-6),r-=6},o.flush=function(){if(r>0&&(i(t<<6-r),t=0,r=0),e%3!=0)for(var o=3-e%3,a=0;a<o;a+=1)n+="="},o.toString=function(){return n},o}(),f=a.toByteArray(),c=0;c<f.length;c+=1)u.writeByte(f[c]);return u.flush(),"data:image/gif;base64,"+u};return t}();qrcode.stringToBytesFuncs["UTF-8"]=function(t){return function(t){for(var r=[],e=0;e<t.length;e++){var n=t.charCodeAt(e);n<128?r.push(n):n<2048?r.push(192|n>>6,128|63&n):n<55296||n>=57344?r.push(224|n>>12,128|n>>6&63,128|63&n):(e++,n=65536+((1023&n)<<10|1023&t.charCodeAt(e)),r.push(240|n>>18,128|n>>12&63,128|n>>6&63,128|63&n))}return r}(t)},function(t){"function"==typeof define&&define.amd?define([],t):"object"==typeof exports&&(module.exports=t())}(function(){return qrcode});
+;window.ccQrGen=qrcode;
+})();
+
+/* ── Compatibilidade: window.QRCode (API do qrcodejs) agora desenhada com o gerador inline acima.
+   Todos os pontos antigos do app (new QRCode(el,{text,width,height,colorDark,colorLight,correctLevel}))
+   passam a funcionar offline, sem carregar nada do CDN. Opção extra: logo (Image) embutido no centro. ── */
+(function () {
+  var NIVEL = { 0: 'M', 1: 'L', 2: 'H', 3: 'Q' };
+
+  function rrect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  /* Desenha o QR em (x,y) com lado `size`, módulos alinhados ao pixel (sem frestas). qz = módulos de margem interna. */
+  window.ccQrDesenhar = function (ctx, x, y, size, texto, o) {
+    o = o || {};
+    var nivel = o.logo ? 'H' : (o.nivel || 'M');
+    var qr = window.ccQrGen(0, nivel);
+    qr.addData(String(texto), 'Byte');
+    qr.make();
+    var n = qr.getModuleCount(), qz = o.qz == null ? 0 : o.qz, tot = n + qz * 2, cel = size / tot;
+    if (o.fundo !== false) { ctx.fillStyle = o.claro || '#ffffff'; ctx.fillRect(x, y, size, size); }
+    ctx.fillStyle = o.escuro || '#000000';
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (!qr.isDark(r, c)) continue;
+        var x0 = Math.round(x + (c + qz) * cel), x1 = Math.round(x + (c + qz + 1) * cel);
+        var y0 = Math.round(y + (r + qz) * cel), y1 = Math.round(y + (r + qz + 1) * cel);
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      }
+    }
+    if (o.logo && o.logo.width) {
+      var lado = size * 0.22, pad = 4 * size / 480, cx = x + size / 2, cy = y + size / 2;   /* máscara branca quadrada, 4 px de segurança (na etiqueta 1200x1700) */
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(Math.round(cx - lado / 2 - pad), Math.round(cy - lado / 2 - pad), Math.round(lado + pad * 2), Math.round(lado + pad * 2));
+      var k = Math.min(lado / o.logo.width, lado / o.logo.height), w = o.logo.width * k, h = o.logo.height * k;
+      ctx.drawImage(o.logo, cx - w / 2, cy - h / 2, w, h);
+    }
+  };
+
+  window.ccQrPNGDataURL = function (texto, size, logo, qz) {
+    var cv = document.createElement('canvas'); cv.width = cv.height = size;
+    window.ccQrDesenhar(cv.getContext('2d'), 0, 0, size, texto, { logo: logo || null, qz: qz == null ? 4 : qz, nivel: 'H' });
+    return cv.toDataURL('image/png');
+  };
+
+  function QR(el, opts) {
+    if (typeof opts === 'string') opts = { text: opts };
+    this._o = Object.assign({ width: 256, height: 256, colorDark: '#000000', colorLight: '#ffffff', correctLevel: 0, text: '', logo: null }, opts || {});
+    this._el = typeof el === 'string' ? document.getElementById(el) : el;
+    if (this._o.text) this.makeCode(this._o.text);
+  }
+  QR.prototype.makeCode = function (t) {
+    var o = this._o, w = o.width, cv = this._cv;
+    if (!cv) { cv = this._cv = document.createElement('canvas'); this._el.appendChild(cv); }
+    cv.width = w; cv.height = o.height; cv.style.width = w + 'px'; cv.style.height = o.height + 'px';
+    window.ccQrDesenhar(cv.getContext('2d'), 0, 0, w, t, {
+      nivel: NIVEL[o.correctLevel] || 'M', escuro: o.colorDark, claro: o.colorLight, logo: o.logo, qz: o.qz == null ? 2 : o.qz
+    });
+  };
+  QR.prototype.clear = function () { if (this._cv && this._cv.parentNode) this._cv.parentNode.removeChild(this._cv); this._cv = null; };
+  QR.CorrectLevel = { L: 1, M: 0, Q: 3, H: 2 };
+  QR.__cc = true;
+  window.QRCode = QR;
+})();
+
+</script>
 <script id="cc-anti-flash-cliente">
 /* Link de cliente (?mesa=, ?role=cliente, ?view=delivery) em aparelho que NÃO é da equipe:
    esconde a capa/painel do dono ANTES de qualquer script rodar, para o cliente cair direto no cardápio. */
@@ -1766,6 +1884,10 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
 <input accept="image/*" class="text-xs w-full file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100" id="adm-upload-banner" onchange="ccProcessarUploadImagem(this,&#39;adm-preview-banner&#39;)" type="file">
 </div>
 </div>
+</div>
+<div class="flex gap-2 flex-wrap mt-3">
+<button class="btn-ghost text-xs px-3 py-2" type="button" onclick="ccBaixarImagemMarca('logo')">📥 Baixar Logomarca</button>
+<button class="btn-ghost text-xs px-3 py-2" type="button" onclick="ccBaixarImagemMarca('banner')">📥 Baixar Banner</button>
 </div>
 <div class="mt-4 pt-4 border-t border-gray-100">
 <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Imagens das 4 abas do Cliente</label>
@@ -7368,17 +7490,35 @@ async function renderQRMesa() {
   const linkInput = document.getElementById("cli-link-txt");
   if(linkInput) linkInput.value = link;
 
-  // Gerar QR
-  const canvas = document.getElementById("cli-qr-canvas");
-  canvas.innerHTML = "";
-  if(window.QRCode) {
-    new QRCode(canvas, {text: link, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H});
-  } else {
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
-    s.onload = () => new QRCode(canvas, {text: link, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H});
-    s.onerror = () => { canvas.innerHTML = `<div style="width:180px;height:180px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;border-radius:12px;font-size:.65rem;color:#6b7280;text-align:center;padding:12px">QR indisponível offline</div>`; };
-    document.head.appendChild(s);
+  // Botões de ação (criados uma única vez, ao lado do link direto)
+  if(!document.getElementById("cli-qr-acoes")) {
+    const col = linkInput && linkInput.closest(".flex-1");
+    if(col) {
+      const acoes = document.createElement("div");
+      acoes.id = "cli-qr-acoes";
+      acoes.className = "flex gap-2 flex-wrap mt-3";
+      acoes.innerHTML =
+        '<button type="button" class="btn-primary px-4 py-2.5 text-xs" onclick="ccBaixarEtiquetaMesa()">📥 Baixar QR</button>' +
+        '<button type="button" class="btn-ghost px-4 py-2.5 text-xs" onclick="imprimirQRMesa()">🖨️ Imprimir</button>';
+      col.appendChild(acoes);
+    }
+  }
+
+  // Etiqueta premium completa (nunca o QR quadrado isolado)
+  const box = document.getElementById("cli-qr-canvas");
+  box.style.width = "auto"; box.style.height = "auto";
+  box.innerHTML = '<p class="text-xs text-gray-400" style="padding:40px 20px">Montando etiqueta…</p>';
+  const tk = ++window._ccEtiquetaTk;
+  try {
+    const cv = await ccEtiquetaCanvas(mesa);
+    if(tk === window._ccEtiquetaTk) {
+      cv.style.cssText = "width:260px;max-width:100%;height:auto;display:block;border-radius:6px";
+      box.innerHTML = "";
+      box.appendChild(cv);
+    }
+  } catch(e) {
+    box.innerHTML = '<p class="text-xs text-gray-500" style="padding:20px">Não foi possível montar a etiqueta.</p>';
+    console.warn("[etiqueta]", e);
   }
 
   renderPreviewCliente(mesa);
@@ -7539,7 +7679,8 @@ function imprimirQRMesa(alvo) {
   let links;
   try { links = mesas.map(n => gerarLinkCliente(n)); } catch(e) { toast("⛔ " + e.message); return; }
 
-  const NOME_RESTAURANTE = "CARDÁPIO BEACH FAROL";
+  const NOME_RESTAURANTE = (typeof config !== "undefined" && config && config.qrTituloEtiqueta) || "CARDÁPIO BEACH FAROL";
+  let LOGO_IMG = null, LOGO_SRC = "";
   const esc = t => String(t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   const montar = () => {
@@ -7549,11 +7690,8 @@ function imprimirQRMesa(alvo) {
     document.body.appendChild(tmp);
     let cartoes;
     try {
-      cartoes = mesas.map((n, i) => {
-        tmp.innerHTML = "";
-        new QRCode(tmp, {text: links[i], width: 600, height: 600, colorDark: "#000000", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.H});
-        return {n: n, src: tmp.querySelector("canvas").toDataURL("image/png")};
-      });
+      // QR gerado pelo gerador inline (sem CDN), correção de erro H, logomarca oficial no centro do código.
+      cartoes = mesas.map((n, i) => ({n: n, src: ccQrPNGDataURL(links[i], 720, LOGO_IMG, 0)}));
     } catch(e) {
       document.body.removeChild(tmp); toast("⚠️ Não foi possível gerar os QR Codes"); return;
     }
@@ -7563,7 +7701,7 @@ function imprimirQRMesa(alvo) {
     for(let i = 0; i < cartoes.length; i += 4) {
       folhas += '<section class="folha">' + cartoes.slice(i, i + 4).map(c =>
         '<div class="cartao"><div class="moldura">'
-        + '<div class="topo"><div class="titulo">' + esc(NOME_RESTAURANTE) + '</div></div>'
+        + '<div class="topo">' + (LOGO_SRC ? '<img class="logo" src="' + LOGO_SRC + '" alt="">' : '') + '<div class="titulo">' + esc(NOME_RESTAURANTE) + '</div></div>'
         + '<div class="mesa"><span class="rot">MESA</span><span class="num">' + String(c.n).padStart(2, "0") + '</span></div>'
         + '<div class="qr"><svg class="cantos" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M2 16V2H16M84 2H98V16M98 84V98H84M16 98H2V84" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>'
         + '<img src="' + c.src + '" alt="QR Mesa ' + c.n + '"></div>'
@@ -7587,17 +7725,18 @@ function imprimirQRMesa(alvo) {
     + P + '.folha{width:210mm;height:296mm;padding:5mm;margin:8px auto;background:#fff;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;page-break-after:always;break-after:page;overflow:hidden}'
     + P + '.cartao{border:0.5pt solid #CCCCCC;display:flex;padding:2mm;background:#fff;overflow:hidden}'
     + P + '.moldura{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:space-between;border:1.4pt solid var(--mold);border-radius:3mm;padding:2mm 3mm;overflow:hidden}'
-    + P + '.topo{width:100%;height:9mm;display:flex;align-items:center;justify-content:center}'
+    + P + '.topo{width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1mm}'
+    + P + '.logo{height:8mm;max-width:52mm;object-fit:contain;display:block}'
     + P + '.titulo{width:100%;text-align:center;font-weight:700;font-size:20pt;line-height:1.1;color:var(--titulo);text-transform:uppercase}'
     + P + '.orn{display:flex;align-items:center;width:62mm;height:3mm}'
     + P + '.orn .l{flex:1;height:0;border-top:1.6pt solid var(--acento)}'
     + P + '.orn .sol{width:3mm;height:3mm;border-radius:50%;background:var(--titulo);margin:0 2mm}'
     + P + '.mesa{width:92%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--numero);color:#fff;border-radius:3mm;padding:2mm 0 1mm}'
     + P + '.mesa .rot{font-size:20pt;font-weight:700;letter-spacing:6pt;line-height:1}'
-    + P + '.mesa .num{font-size:92pt;font-weight:900;line-height:1;letter-spacing:-2pt}'
+    + P + '.mesa .num{font-size:80pt;font-weight:900;line-height:1;letter-spacing:-2pt}'
     + P + '.qr{position:relative;background:#fff;padding:4mm;line-height:0}'
     + P + '.qr .cantos{position:absolute;top:0;left:0;width:100%;height:100%;color:var(--mold)}'
-    + P + '.qr img{position:relative;display:block;width:4.3cm;height:4.3cm;image-rendering:pixelated}'
+    + P + '.qr img{position:relative;display:block;width:4.1cm;height:4.1cm;image-rendering:pixelated}'
     + P + '.passos{font-size:10.5pt;line-height:1.25;color:#000;text-align:left}'
     + P + '.passos .tit{font-size:12pt;font-weight:700;letter-spacing:.3pt;color:var(--cab);margin-bottom:1mm}'
     + P + '.passos b{font-weight:700}'
@@ -7637,12 +7776,7 @@ function imprimirQRMesa(alvo) {
     });
   };
 
-  if(window.QRCode) { montar(); return; }
-  const sc = document.createElement("script");
-  sc.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
-  sc.onload = montar;
-  sc.onerror = () => { toast("⚠️ QR indisponível offline"); };
-  document.head.appendChild(sc);
+  ccLogoImg().then(img => { LOGO_IMG = img; LOGO_SRC = img ? img.src : ""; montar(); });
 }
 
 // ─── AUTO-REFRESH 10s (mantém cozinha/atendente/cliente) ──────
@@ -9350,13 +9484,14 @@ function abrirNovoDelivery(editId) {
         </div>
       </div>
       <div style="margin-bottom:12px">
-        <label style="font-size:.72rem;font-weight:700;color:#6b7280;display:block;margin-bottom:4px">📍 Endereço de Entrega *</label>
-        <input id="dl-end" class="input-base" value="${ped ? (ped.endereco||'') : ''}" placeholder="Rua, Número, Bairro..."/>
+        <label style="font-size:.72rem;font-weight:700;color:#6b7280;display:block;margin-bottom:4px">📍 Endereço Completo de Destino *</label>
+        <input id="dl-end" class="input-base" value="${ped ? (ped.endereco||'') : ''}" placeholder="Rua, número, bairro, cidade/UF, CEP"/>
       </div>
       <div style="margin-bottom:16px">
         <label style="font-size:.72rem;font-weight:700;color:#6b7280;display:block;margin-bottom:4px">Complemento / Referência</label>
         <input id="dl-comp" class="input-base" value="${ped ? (ped.complemento||'') : ''}" placeholder="Apto, próximo a..."/>
       </div>
+      ${typeof ccDlCampos === "function" ? ccDlCampos(ped) : ""}
 
       <!-- Seleção de itens do cardápio -->
       <p style="font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:#ea580c;margin-bottom:8px">🍽️ Itens do Pedido</p>
@@ -9590,6 +9725,10 @@ async function confirmarDelivery(editId) {
     return { id, nome: it ? it.nome : id, preco, q };
   });
 
+  const _dlTaxa = Math.max(0, parseFloat((document.getElementById("dl-taxa") || {}).value) || 0);
+  const _dlEta  = Math.max(0, parseInt((document.getElementById("dl-eta") || {}).value, 10) || 0);
+  const _dlCom  = (typeof ccDlCalc === "function") ? ccDlCalc(total, _dlTaxa) : { entregador: 0, brigada: 0 };
+
   const novoPed = {
     id:          editId || ("DL_" + Date.now()),
     data:        new Date().toISOString(),
@@ -9604,13 +9743,19 @@ async function confirmarDelivery(editId) {
     modo_preco:  (typeof config !== "undefined") ? (config.modo_preco || "praia") : "praia",
     status:      editId ? (pedidosDelivery.find(p => p.id === editId)?.status || "recebido") : "recebido",
     itens:       itensDetalhe,
+    motoboy:              ((document.getElementById("dl-motoboy") || {}).value || "").trim(),
+    taxa_entrega:         _dlTaxa,
+    tempo_estimado_min:   _dlEta || null,
+    previsao_entrega:     _dlEta ? new Date(Date.now() + _dlEta * 60000).toISOString() : null,
+    comissao_entregador:  _dlCom.entregador,
+    comissao_brigada:     _dlCom.brigada,
     latitude:    geoDelivery ? geoDelivery.lat : (editId ? (pedidosDelivery.find(p => p.id === editId)?.latitude ?? null) : null),
     longitude:   geoDelivery ? geoDelivery.lng : (editId ? (pedidosDelivery.find(p => p.id === editId)?.longitude ?? null) : null),
   };
 
   if(editId) {
     const idx = pedidosDelivery.findIndex(p => p.id === editId);
-    if(idx >= 0) pedidosDelivery[idx] = novoPed;
+    if(idx >= 0) pedidosDelivery[idx] = Object.assign({}, pedidosDelivery[idx], novoPed);
   } else {
     pedidosDelivery.unshift(novoPed);
     // Registrar também no histórico geral de vendas (mesma lógica do balcão)
@@ -9621,6 +9766,8 @@ async function confirmarDelivery(editId) {
         subtotal: total, taxaVal: 0, total,
         obs: novoPed.obs, itens: itensDetalhe,
         tipo_venda: "delivery",
+        motoboy: novoPed.motoboy, taxaEntrega: novoPed.taxa_entrega,
+        comissaoEntregador: novoPed.comissao_entregador, comissaoBrigada: novoPed.comissao_brigada,
       });
       if(typeof salvar === "function") salvar("historico", historico);
     }
@@ -9666,6 +9813,8 @@ function renderDelivery() {
   const lista  = document.getElementById("dl-lista");
   const empty  = document.getElementById("dl-empty");
   if(!lista) return;
+  try { if(typeof ccDlRenderFinanceiro === "function") ccDlRenderFinanceiro(); } catch(e) { console.warn("[delivery] financeiro:", e); }
+  setTimeout(function(){ try { if(typeof ccDlPollPosicoes === "function") ccDlPollPosicoes(); } catch(e) {} }, 60);
 
   const hoje = new Date().toDateString();
   const hojeP   = pedidosDelivery.filter(p => new Date(p.data).toDateString() === hoje);
@@ -9706,12 +9855,14 @@ function renderDelivery() {
           </div>
           <p style="font-size:.75rem;color:#6b7280">📍 ${ped.endereco}${ped.complemento ? " · " + ped.complemento : ""}</p>
           ${ped.telefone ? `<p style="font-size:.72rem;color:#6b7280">📞 ${ped.telefone}</p>` : ""}
+          ${typeof ccDlLinhaLogistica === "function" ? ccDlLinhaLogistica(ped) : ""}
           <p style="font-size:.68rem;color:#9ca3af;margin-top:2px">${fmtData(ped.data)} · ${ped.id.slice(0,15)}</p>
         </div>
         <div style="text-align:right">
           <p style="font-weight:900;font-size:1.1rem;color:#ea580c">${fmtBRL(ped.total)}</p>
           <p style="font-size:.7rem;color:#6b7280">${pag.emoji} ${pag.label}</p>
           <p style="font-size:.62rem;color:#9ca3af">${ped.modo_preco === "restaurante" ? "🍽️" : "🏖️"} ${ped.modo_preco}</p>
+          ${typeof ccDlBlocoValores === "function" ? ccDlBlocoValores(ped) : ""}
         </div>
       </div>
 
@@ -10246,25 +10397,9 @@ function _carregarQRLib(cb) {
 }
 
 function _baixarQR(divId, label) {
-  const wrap = document.getElementById(divId);
-  if(!wrap) return;
-  const canvas = wrap.querySelector("canvas");
-  const img    = wrap.querySelector("img");
-  let url;
-  if(canvas) {
-    url = canvas.toDataURL("image/png");
-  } else if(img) {
-    url = img.src;
-  } else {
-    toast("⚠️ QR Code não gerado"); return;
-  }
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "qr-" + label.replace(/[^a-zA-Z0-9]/g,"_").toLowerCase() + ".png";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  toast("⬇️ QR Code baixado!");
+  // divId vem como "qr-<chave>" (normal, delivery, praia, restaurante). O arquivo é gerado em alta resolução
+  // pelo gerador inline (logo no centro) e baixado via Blob + <a download>.
+  return ccBaixarQRLink(String(divId || "").replace(/^qr-/, ""), label);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -22184,5 +22319,841 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   setInterval(checarAvisoCardapio, 2500);
   window.addEventListener("cc:nuvem-pronta", checarAvisoCardapio);
 })();
+</script>
+<script id="cc-mod-03">
+/* ═══════════════════════════════════════════════════════════════════════
+   VISÃO DO MOTOBOY (?motoboy=true | ?delivery=true)
+   Lista dos pedidos atribuídos ao entregador + mapa ao vivo (Leaflet/OpenStreetMap) + rota até o cliente
+   (OSRM público; se falhar, linha reta + Google Maps/Waze) + GPS contínuo (watchPosition) publicado no Supabase
+   + botão manual "✅ Confirmar Entrega Realizada".
+   Limite honesto do navegador: GPS em segundo plano só funciona com a tela ligada (usamos Wake Lock para ela não apagar).
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var S = { nome: '', watch: null, pos: null, mapa: null, mkM: null, mkD: null, linha: null, sel: null,
+            ultPub: 0, ultRota: 0, ultRotaPos: null, rota: null, nuvem: '', wake: null, timer: null, geo: {}, leaflet: null };
+  var LS_NOME = 'cc_motoboy_nome', LS_POS = 'cc_motoboy_ultima_pos';
+  var ATIVOS = ['recebido', 'preparo', 'saiu'];
+  function $(id) { return document.getElementById(id); }
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function brl(v) { return typeof fmtBRL === 'function' ? fmtBRL(v) : 'R$ ' + Number(v || 0).toFixed(2).replace('.', ','); }
+  function toastz(t) { if (typeof window.toast === 'function') window.toast(t); }
+  function ped() {
+    try {
+      var arr = JSON.parse(localStorage.getItem('solbahia_pedidosDelivery_v1') || '[]');
+      if (Array.isArray(arr) && typeof pedidosDelivery !== 'undefined') { pedidosDelivery.length = 0; Array.prototype.push.apply(pedidosDelivery, arr); }
+    } catch (e) {}
+    return typeof pedidosDelivery !== 'undefined' ? pedidosDelivery : [];
+  }
+  function meus() { var n = norm(S.nome); return n ? ped().filter(function (p) { return norm(p.motoboy) === n && ATIVOS.indexOf(p.status) >= 0; }) : []; }
+  function distM(a, b) {
+    var R = 6371000, r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lng - a.lng) * r;
+    var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  function kmTxt(m) { return m >= 1000 ? (m / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(m) + ' m'; }
+
+  /* ── UI ──────────────────────────────────────────────────────────── */
+  function montar() {
+    if ($('cc-motoboy-root')) return;
+    var r = document.createElement('div'); r.id = 'cc-motoboy-root';
+    r.style.cssText = 'min-height:100vh;background:#f3f4f6;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-bottom:40px';
+    r.innerHTML =
+      '<div style="background:linear-gradient(135deg,#0f2340,#0369a1);color:#fff;padding:16px 16px 14px">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
+          '<div style="font-weight:900;font-size:1.1rem">🛵 Rota do Entregador</div>' +
+          '<div id="mb-gps" style="font-size:.72rem;font-weight:700;background:rgba(255,255,255,.15);padding:4px 10px;border-radius:999px">📡 GPS desligado</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:12px">' +
+          '<input id="mb-nome" placeholder="Seu nome (igual ao cadastrado no pedido)" style="flex:1;min-width:0;padding:10px 12px;border:0;border-radius:10px;font-size:.9rem">' +
+          '<button id="mb-nome-ok" type="button" style="padding:10px 14px;border:0;border-radius:10px;background:#22c55e;color:#fff;font-weight:800">Entrar</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="mb-lista" style="padding:12px"></div>' +
+      '<div id="mb-det" style="padding:0 12px"></div>';
+    document.body.appendChild(r);
+    $('mb-nome').value = S.nome;
+    $('mb-nome-ok').onclick = function () { S.nome = $('mb-nome').value.trim(); try { localStorage.setItem(LS_NOME, S.nome); } catch (e) {} S.sel = null; render(); if (S.nome) iniciarGPS(); };
+    $('mb-nome').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('mb-nome-ok').click(); });
+  }
+
+  function limparMapa() { try { if (S.mapa) S.mapa.remove(); } catch (e) {} S.mapa = S.mkM = S.mkD = S.linha = null; S.ultRotaPos = null; }
+
+  function render() {
+    var el = $('mb-lista'); if (!el) return;
+    if (!S.nome) { el.innerHTML = '<p style="text-align:center;color:#6b7280;font-size:.85rem;padding:30px 10px">Digite seu nome para ver os pedidos atribuídos a você.</p>'; limparMapa(); $('mb-det').innerHTML = ''; return; }
+    var l = meus();
+    if (!l.length) { el.innerHTML = '<p style="text-align:center;color:#6b7280;font-size:.85rem;padding:30px 10px">🏝️ Nenhuma entrega atribuída a <b>' + esc(S.nome) + '</b> agora.</p>'; limparMapa(); $('mb-det').innerHTML = ''; pararGPSSePreciso(); return; }
+    if (!S.sel || !l.some(function (p) { return p.id === S.sel; })) S.sel = l[0].id;
+    el.innerHTML = l.map(function (p) {
+      var on = p.id === S.sel, taxa = Number(p.taxa_entrega) || 0, total = (Number(p.total) || 0) + taxa;
+      var st = (typeof DELIVERY_STATUS !== 'undefined' && DELIVERY_STATUS[p.status]) || { emoji: '', label: p.status, cor: '#6b7280' };
+      return '<div data-id="' + esc(p.id) + '" class="mb-card" style="background:#fff;border:2px solid ' + (on ? '#0369a1' : '#e5e7eb') + ';border-radius:16px;padding:12px;margin-bottom:10px;cursor:pointer">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px"><b style="color:#0f2340">' + esc(p.cliente || 'Cliente') + '</b>' +
+        '<span style="font-size:.68rem;font-weight:800;color:' + st.cor + '">' + st.emoji + ' ' + esc(st.label) + '</span></div>' +
+        '<div style="font-size:.8rem;color:#374151;margin-top:4px">📍 ' + esc(p.endereco) + (p.complemento ? ' · ' + esc(p.complemento) : '') + '</div>' +
+        (p.telefone ? '<div style="font-size:.75rem;color:#6b7280">📞 ' + esc(p.telefone) + '</div>' : '') +
+        '<div style="font-size:.75rem;color:#6b7280;margin-top:4px">⏱️ ' + (p.tempo_estimado_min ? esc(p.tempo_estimado_min) + ' min estimados' : 'sem estimativa') +
+        ' · 💳 ' + esc(((typeof DELIVERY_PAG !== 'undefined' && DELIVERY_PAG[p.pag]) || { label: p.pag }).label) + '</div>' +
+        '<div style="font-size:.8rem;margin-top:6px"><b style="color:#ea580c">' + brl(total) + '</b> <span style="color:#9ca3af">(itens ' + brl(p.total) + ' + entrega ' + brl(taxa) + ')</span></div></div>';
+    }).join('');
+    el.querySelectorAll('.mb-card').forEach(function (c) { c.onclick = function () { S.sel = c.getAttribute('data-id'); S.ultRotaPos = null; render(); }; });
+    detalhe();
+  }
+
+  function detalhe() {
+    var p = ped().filter(function (x) { return x.id === S.sel; })[0], det = $('mb-det'); if (!p || !det) return;
+    if (!$('mb-mapa')) {
+      det.innerHTML =
+        '<div style="background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">' +
+          '<div id="mb-mapa" style="height:300px;background:#e5e7eb;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:.8rem">Carregando mapa…</div>' +
+          '<div id="mb-info" style="padding:10px 12px;font-size:.82rem;color:#0f2340;font-weight:700"></div>' +
+          '<div id="mb-acoes" style="display:flex;gap:8px;flex-wrap:wrap;padding:0 12px 12px"></div>' +
+        '</div>';
+      carregarLeaflet(function (ok) { S.leaflet = ok; if (ok) criarMapa(); else $('mb-mapa').textContent = 'Mapa indisponível (sem internet). Use os botões Google Maps / Waze.'; atualizarMapa(); });
+    }
+    var bt = function (txt, cor, fn, id) { return '<button type="button" id="' + id + '" style="flex:1;min-width:120px;padding:12px;border:0;border-radius:12px;background:' + cor + ';color:#fff;font-weight:800;font-size:.82rem">' + txt + '</button>'; };
+    var a = $('mb-acoes');
+    a.innerHTML = bt('🗺️ Google Maps', '#0891b2', null, 'mb-gm') + bt('🚗 Waze', '#33ccff', null, 'mb-wz') +
+      (p.status !== 'saiu' ? bt('🛵 Saí para entrega', '#0284c7', null, 'mb-saiu') : '') +
+      bt('✅ Confirmar Entrega Realizada', '#16a34a', null, 'mb-ok');
+    $('mb-wz').style.color = '#0f2340';
+    $('mb-gm').onclick = function () { abrirExterno(p, 'gm'); };
+    $('mb-wz').onclick = function () { abrirExterno(p, 'wz'); };
+    if ($('mb-saiu')) $('mb-saiu').onclick = function () { if (typeof avancarDelivery === 'function') { avancarDelivery(p.id, 'saiu'); render(); } };
+    $('mb-ok').onclick = function () { confirmarEntrega(p.id); };
+    atualizarMapa();
+  }
+
+  function abrirExterno(p, qual) {
+    var d = destinoSinc(p);
+    if (!d) { if (qual === 'gm') window.open('https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(p.endereco), '_blank'); else toastz('Sem coordenadas do destino para o Waze.'); return; }
+    if (qual === 'gm') window.open('https://www.google.com/maps/dir/?api=1&destination=' + d.lat + ',' + d.lng, '_blank');
+    else window.open('https://waze.com/ul?ll=' + d.lat + ',' + d.lng + '&navigate=yes', '_blank');
+  }
+
+  /* ── Destino (GPS capturado no pedido → cache → geocodificação do endereço digitado) ── */
+  function destinoSinc(p) {
+    if (p.latitude && p.longitude) return { lat: Number(p.latitude), lng: Number(p.longitude), fonte: 'gps' };
+    if (S.geo[p.id]) return S.geo[p.id];
+    try { var c = JSON.parse(localStorage.getItem('cc_geo_dest_' + p.id) || 'null'); if (c) { S.geo[p.id] = c; return c; } } catch (e) {}
+    return null;
+  }
+  function geocodificar(p, cb) {
+    var ctl = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ctl) ctl.abort(); }, 9000);
+    fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=' + encodeURIComponent(p.endereco), { signal: ctl ? ctl.signal : undefined, headers: { 'Accept-Language': 'pt-BR' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        clearTimeout(t);
+        if (j && j[0]) { var d = { lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon), fonte: 'endereco' }; S.geo[p.id] = d; try { localStorage.setItem('cc_geo_dest_' + p.id, JSON.stringify(d)); } catch (e) {} cb(d); } else cb(null);
+      }).catch(function () { clearTimeout(t); cb(null); });
+  }
+
+  /* ── Mapa ────────────────────────────────────────────────────────── */
+  function carregarLeaflet(cb) {
+    if (window.L && window.L.map) { cb(true); return; }
+    var css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(css);
+    var s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    s.onload = function () { cb(true); }; s.onerror = function () { cb(false); }; document.head.appendChild(s);
+  }
+  function criarMapa() {
+    var el = $('mb-mapa'); if (!el || S.mapa) return;
+    el.innerHTML = ''; el.style.display = 'block';
+    S.mapa = L.map(el, { zoomControl: true }).setView([-12.9777, -38.5016], 13);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(S.mapa);
+  }
+  function atualizarMapa() {
+    var p = ped().filter(function (x) { return x.id === S.sel; })[0]; if (!p) return;
+    var info = $('mb-info');
+    var d = destinoSinc(p);
+    if (!d && !p.__geocodificando) {
+      p.__geocodificando = true;
+      geocodificar(p, function (r) { p.__geocodificando = false; if (!r && info) info.textContent = 'Não achei o endereço no mapa — use Google Maps / Waze.'; else atualizarMapa(); });
+    }
+    if (!S.mapa || !S.leaflet) { if (info) info.textContent = d ? '' : 'Localizando o endereço…'; return; }
+    if (S.pos) {
+      if (!S.mkM) S.mkM = L.circleMarker([S.pos.lat, S.pos.lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#2563eb', fillOpacity: 1 }).addTo(S.mapa).bindTooltip('Você');
+      else S.mkM.setLatLng([S.pos.lat, S.pos.lng]);
+    }
+    if (d) {
+      if (!S.mkD) S.mkD = L.circleMarker([d.lat, d.lng], { radius: 10, color: '#fff', weight: 3, fillColor: '#dc2626', fillOpacity: 1 }).addTo(S.mapa).bindTooltip('Cliente');
+      else S.mkD.setLatLng([d.lat, d.lng]);
+    }
+    if (S.pos && d) rota(S.pos, d); else if (d) S.mapa.setView([d.lat, d.lng], 16);
+  }
+  function rota(o, d) {
+    var agora = Date.now(), moveu = !S.ultRotaPos || distM(o, S.ultRotaPos) > 60;
+    if (!moveu && agora - S.ultRota < 45000) return;
+    S.ultRota = agora; S.ultRotaPos = { lat: o.lat, lng: o.lng };
+    var info = $('mb-info');
+    var ctl = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ctl) ctl.abort(); }, 8000);
+    fetch('https://router.project-osrm.org/route/v1/driving/' + o.lng + ',' + o.lat + ';' + d.lng + ',' + d.lat + '?overview=full&geometries=geojson', { signal: ctl ? ctl.signal : undefined })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        clearTimeout(t);
+        var r0 = j && j.routes && j.routes[0]; if (!r0) throw new Error('sem rota');
+        var pts = r0.geometry.coordinates.map(function (c) { return [c[1], c[0]]; });
+        desenharLinha(pts, false, o, d);
+        if (info) info.textContent = '🛣️ ' + kmTxt(r0.distance) + ' · ~' + Math.max(1, Math.round(r0.duration / 60)) + ' min até o cliente';
+      }).catch(function () {
+        clearTimeout(t);
+        desenharLinha([[o.lat, o.lng], [d.lat, d.lng]], true, o, d);
+        if (info) info.textContent = '📏 ' + kmTxt(distM(o, d)) + ' em linha reta (rota detalhada indisponível agora — use Google Maps / Waze)';
+      });
+  }
+  function desenharLinha(pts, reta, o, d) {
+    if (S.linha) S.mapa.removeLayer(S.linha);
+    S.linha = L.polyline(pts, { color: reta ? '#6b7280' : '#2563eb', weight: 5, opacity: .85, dashArray: reta ? '8 8' : null }).addTo(S.mapa);
+    S.mapa.fitBounds(S.linha.getBounds(), { padding: [30, 30] });
+  }
+
+  /* ── GPS ao vivo + publicação no Supabase ────────────────────────── */
+  function iniciarGPS() {
+    if (S.watch != null) return;
+    if (!navigator.geolocation) { gps('⚠️ Sem GPS neste aparelho'); return; }
+    S.watch = navigator.geolocation.watchPosition(onPos, function (e) { gps('⚠️ GPS: ' + (e && e.message ? e.message : 'negado')); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 25000 });
+    try { if (navigator.wakeLock && navigator.wakeLock.request) navigator.wakeLock.request('screen').then(function (w) { S.wake = w; }).catch(function () {}); } catch (e) {}
+    gps('📡 Procurando sinal…');
+  }
+  function pararGPSSePreciso() {
+    if (meus().length) return;
+    if (S.watch != null) { navigator.geolocation.clearWatch(S.watch); S.watch = null; }
+    try { if (S.wake) { S.wake.release(); S.wake = null; } } catch (e) {}
+    gps('📡 GPS desligado (sem entregas)');
+  }
+  function gps(t) { var e = $('mb-gps'); if (e) e.textContent = t; }
+  function onPos(pos) {
+    var c = pos.coords;
+    if (!isFinite(c.latitude) || !isFinite(c.longitude) || (c.latitude === 0 && c.longitude === 0)) return;
+    S.pos = { lat: c.latitude, lng: c.longitude, prec: c.accuracy, ts: Date.now() };
+    try { localStorage.setItem(LS_POS, JSON.stringify(S.pos)); } catch (e) {}
+    gps('📡 GPS ativo ±' + Math.round(c.accuracy || 0) + ' m' + (S.nuvem ? ' · nuvem ' + S.nuvem : ''));
+    atualizarMapa();
+    if (Date.now() - S.ultPub >= 15000) publicar();
+  }
+  function publicar() {
+    S.ultPub = Date.now();
+    var sb = typeof ccGetSupabaseClient === 'function' ? ccGetSupabaseClient() : null;
+    if (!sb || !S.pos || !S.nome) return;
+    var l = meus();
+    try {
+      sb.from('entregadores_posicao').upsert({
+        empresa_id: window.COOKCONTROL_EMPRESA_ID_ATIVA || '', motoboy: S.nome,
+        latitude: S.pos.lat, longitude: S.pos.lng, precisao: S.pos.prec,
+        pedido_id: (l.filter(function (p) { return p.id === S.sel; })[0] || l[0] || {}).id || null,
+        atualizado_em: new Date().toISOString()
+      }, { onConflict: 'empresa_id,motoboy' }).then(function (r) {
+        S.nuvem = (r && r.error) ? 'offline' : 'ok';
+        if (r && r.error && !S.avisouNuvem) { S.avisouNuvem = true; console.warn('[motoboy] posição não gravada na nuvem:', r.error.message); }
+      });
+    } catch (e) { S.nuvem = 'offline'; }
+  }
+
+  /* ── Confirmar entrega ───────────────────────────────────────────── */
+  function confirmarEntrega(id) {
+    var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+    if (!confirm('Confirmar que o pedido de ' + (p.cliente || 'cliente') + ' foi ENTREGUE?')) return;
+    p.entrega_confirmada_por = S.nome;
+    p.entrega_confirmada_em = new Date().toISOString();
+    if (S.pos) p.entrega_geo = { lat: S.pos.lat, lng: S.pos.lng, prec: S.pos.prec };
+    if (typeof salvarDelivery === 'function') salvarDelivery();
+    if (typeof avancarDelivery === 'function') avancarDelivery(id, 'entregue');
+    S.sel = null; S.ultRotaPos = null; if (S.linha && S.mapa) { S.mapa.removeLayer(S.linha); S.linha = null; }
+    render(); pararGPSSePreciso();
+    toastz('✅ Entrega confirmada!');
+  }
+
+  window.ccMotoboyIniciar = function () {
+    try { S.nome = localStorage.getItem(LS_NOME) || ''; } catch (e) {}
+    document.body.classList.add('cc-motoboy');
+    montar(); render();
+    if (S.nome) iniciarGPS();
+    clearInterval(S.timer); S.timer = setInterval(function () { render(); }, 20000);   /* puxa pedidos novos atribuídos */
+    document.addEventListener('visibilitychange', function () { if (!document.hidden && S.watch != null && navigator.wakeLock) navigator.wakeLock.request('screen').then(function (w) { S.wake = w; }).catch(function () {}); });
+  };
+})();
+
+</script>
+<script id="cc-mod-04">
+/* ═══════════════════════════════════════════════════════════════════════
+   DELIVERY — logística, valores, comissões e fechamento (Admin/Proprietário)
+   Regras (configuráveis no próprio painel, salvas em config):
+     • Comissão do entregador = % da TAXA DE ENTREGA do pedido (padrão 100%).
+     • Comissão da brigada    = % do SUBTOTAL DOS ITENS (padrão 10%, a mesma taxa já usada nos relatórios de turno).
+     • Só pedidos "Entregue" entram nas comissões/fechamento; os demais aparecem como "em andamento".
+   Nada aqui altera o campo `total` do pedido nem os totais do Caixa: são campos NOVOS (taxa_entrega,
+   comissao_entregador, comissao_brigada, motoboy, tempo_estimado_min) somados ao registro existente.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  function r2(v) { return Math.round((Number(v) || 0) * 100) / 100; }
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function brl(v) { return typeof fmtBRL === 'function' ? fmtBRL(v) : 'R$ ' + r2(v).toFixed(2).replace('.', ','); }
+  function hhmm(d) { return new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+  function diaISO(d) { var x = new Date(d); return x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2); }
+  function lista() { return typeof pedidosDelivery !== 'undefined' ? pedidosDelivery : []; }
+
+  window.ccDlCfg = function () {
+    var c = (typeof config !== 'undefined' && config) || {};
+    return {
+      taxa: c.taxaEntrega != null ? Number(c.taxaEntrega) || 0 : 7,
+      eta: Number(c.dlTempoPadraoMin) || 40,
+      pctEnt: c.comissaoEntregadorPct != null ? Number(c.comissaoEntregadorPct) : 100,
+      pctBri: c.comissaoBrigadaPct != null ? Number(c.comissaoBrigadaPct) : 10
+    };
+  };
+  window.ccDlCalc = function (subtotal, taxa) {
+    var c = window.ccDlCfg();
+    return { entregador: r2((Number(taxa) || 0) * c.pctEnt / 100), brigada: r2((Number(subtotal) || 0) * c.pctBri / 100) };
+  };
+  window.ccDlMotoboysConhecidos = function () {
+    var set = {}, out = [];
+    lista().forEach(function (p) { var n = String(p.motoboy || '').trim(); if (n && !set[n.toLowerCase()]) { set[n.toLowerCase()] = 1; out.push(n); } });
+    var extra = (typeof config !== 'undefined' && config && Array.isArray(config.motoboys)) ? config.motoboys : [];
+    extra.forEach(function (n) { n = String(n || '').trim(); if (n && !set[n.toLowerCase()]) { set[n.toLowerCase()] = 1; out.push(n); } });
+    return out;
+  };
+  function valores(p) {
+    var sub = Number(p.total) || 0, taxa = p.taxa_entrega != null ? Number(p.taxa_entrega) || 0 : 0;
+    var c = (p.comissao_entregador != null && p.comissao_brigada != null)
+      ? { entregador: Number(p.comissao_entregador), brigada: Number(p.comissao_brigada) } : window.ccDlCalc(sub, taxa);
+    return { sub: sub, taxa: taxa, total: r2(sub + taxa), ent: c.entregador, bri: c.brigada };
+  }
+
+  /* ── Pedaços do card de cada pedido ──────────────────────────────── */
+  window.ccDlLinhaLogistica = function (p) {
+    var h = '<p style="font-size:.74rem;color:#0f2340;margin-top:3px">🛵 Motoboy: ' +
+      (p.motoboy ? '<b>' + esc(p.motoboy) + '</b>' : '<b style="color:#dc2626">não atribuído</b>') + '</p>';
+    if (p.tempo_estimado_min) {
+      var prev = new Date(new Date(p.data).getTime() + Number(p.tempo_estimado_min) * 60000);
+      h += '<p style="font-size:.72rem;color:#6b7280">⏱️ Estimado: ' + esc(p.tempo_estimado_min) + ' min · previsto ' + hhmm(prev) + '</p>';
+    }
+    if (p.entregueEm) {
+      var real = Math.max(1, Math.round((new Date(p.entregueEm) - new Date(p.data)) / 60000));
+      h += '<p style="font-size:.72rem;color:#16a34a">✅ Entregue em ' + real + ' min (' + hhmm(p.entregueEm) + ')</p>';
+    }
+    h += '<p style="font-size:.7rem;color:#0891b2" data-dl-pos="' + esc(p.id) + '"></p>';
+    return h;
+  };
+  window.ccDlBlocoValores = function (p) {
+    var v = valores(p), l = function (a, b, cor) { return '<p style="font-size:.66rem;color:' + (cor || '#6b7280') + '">' + a + ' <b>' + brl(b) + '</b></p>'; };
+    return '<div style="margin-top:4px;padding-top:4px;border-top:1px dashed #e5e7eb">' +
+      l('Itens', v.sub) + l('Entrega', v.taxa) + l('Cobrado', v.total, '#0f2340') +
+      l('🛵 Entregador', v.ent, '#0369a1') + l('🧑‍🤝‍🧑 Brigada', v.bri, '#7c3aed') + '</div>';
+  };
+
+  /* Campos estruturados do modal "Novo Pedido Delivery": motoboy, tempo estimado e taxa de entrega */
+  window.ccDlCampos = function (p) {
+    var c = window.ccDlCfg(), mb = window.ccDlMotoboysConhecidos();
+    var lb = 'font-size:.72rem;font-weight:700;color:#6b7280;display:block;margin-bottom:4px';
+    return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
+      '<div><label style="' + lb + '">🛵 Nome do Motoboy</label>' +
+        '<input id="dl-motoboy" list="dl-motoboy-lista" class="input-base" autocomplete="off" placeholder="Quem vai entregar" value="' + esc(p ? (p.motoboy || '') : '') + '"/>' +
+        '<datalist id="dl-motoboy-lista">' + mb.map(function (n) { return '<option value="' + esc(n) + '"></option>'; }).join('') + '</datalist></div>' +
+      '<div><label style="' + lb + '">⏱️ Tempo estimado (min)</label>' +
+        '<input id="dl-eta" type="number" min="1" step="1" class="input-base" value="' + esc(p && p.tempo_estimado_min ? p.tempo_estimado_min : c.eta) + '"/></div>' +
+      '<div style="grid-column:1/-1"><label style="' + lb + '">💵 Taxa de entrega (R$)</label>' +
+        '<input id="dl-taxa" type="number" min="0" step="0.01" class="input-base" value="' + esc(p && p.taxa_entrega != null ? p.taxa_entrega : c.taxa) + '"/></div>' +
+    '</div>';
+  };
+
+  /* ── Painel financeiro do Delivery ───────────────────────────────── */
+  function agrupar(iso) {
+    var doDia = lista().filter(function (p) { return diaISO(p.data) === iso && p.status !== 'cancelado'; });
+    var g = {}, tot = { n: 0, ent: 0, sub: 0, taxa: 0, cEnt: 0, cBri: 0 }, andamento = { n: 0, sub: 0 }, fatDia = 0;
+    doDia.forEach(function (p) {
+      var v = valores(p); fatDia += v.sub;
+      if (p.status !== 'entregue') { andamento.n++; andamento.sub += v.sub; return; }
+      var k = String(p.motoboy || '').trim() || '— sem motoboy —';
+      var r = g[k] = g[k] || { nome: k, n: 0, sub: 0, taxa: 0, cEnt: 0, cBri: 0 };
+      r.n++; r.sub += v.sub; r.taxa += v.taxa; r.cEnt += v.ent; r.cBri += v.bri;
+      tot.n++; tot.sub += v.sub; tot.taxa += v.taxa; tot.cEnt += v.ent; tot.cBri += v.bri;
+    });
+    return { iso: iso, linhas: Object.keys(g).sort().map(function (k) { return g[k]; }), tot: tot, andamento: andamento, fatDia: fatDia, pedidosDia: doDia.length };
+  }
+  window.ccDlRenderFinanceiro = function () {
+    var lst = document.getElementById('dl-lista'); if (!lst) return;
+    var host = document.getElementById('dl-financeiro');
+    if (!host) {
+      host = document.createElement('div'); host.id = 'dl-financeiro'; host.className = 'admin-card mb-4';
+      var fil = document.getElementById('dl-fil-todos'), ref = fil ? fil.parentElement : lst;
+      ref.parentNode.insertBefore(host, ref);
+    }
+    var inp = document.getElementById('dl-fin-data'), iso = (inp && inp.value) || diaISO(new Date());
+    var d = agrupar(iso), c = window.ccDlCfg(); window.__ccDlFech = d;
+    var th = 'padding:6px 8px;text-align:right;font-size:.65rem;color:#6b7280;text-transform:uppercase';
+    var td = 'padding:6px 8px;text-align:right;font-size:.78rem';
+    var linhas = d.linhas.length ? d.linhas.map(function (r) {
+      return '<tr style="border-top:1px solid #f3f4f6"><td style="padding:6px 8px;font-weight:700;font-size:.78rem">' + esc(r.nome) + '</td><td style="' + td + '">' + r.n + '</td><td style="' + td + '">' + brl(r.sub) +
+        '</td><td style="' + td + '">' + brl(r.taxa) + '</td><td style="' + td + ';color:#0369a1;font-weight:700">' + brl(r.cEnt) + '</td><td style="' + td + ';color:#7c3aed;font-weight:700">' + brl(r.cBri) + '</td></tr>';
+    }).join('') : '<tr><td colspan="6" style="padding:14px;text-align:center;color:#9ca3af;font-size:.78rem">Nenhuma entrega concluída neste dia.</td></tr>';
+    var liquido = r2(d.tot.sub + d.tot.taxa - d.tot.cEnt - d.tot.cBri);
+    var campo = 'width:100%;border:1.5px solid #e5e7eb;border-radius:8px;padding:6px 8px;font-size:.78rem';
+    host.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">' +
+        '<p class="font-bold text-sm uppercase tracking-widest text-orange-400">💰 Faturamento, comissões e fechamento</p>' +
+        '<input id="dl-fin-data" type="date" value="' + iso + '" onchange="ccDlRenderFinanceiro()" style="border:1.5px solid #e5e7eb;border-radius:8px;padding:5px 8px;font-size:.78rem"></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px">' +
+        '<div class="stat-card"><p class="text-xs font-bold text-gray-400 uppercase">Faturamento (itens)</p><p class="font-black text-lg text-orange-600">' + brl(d.fatDia) + '</p><p style="font-size:.62rem;color:#9ca3af">' + d.pedidosDia + ' pedido(s), sem cancelados</p></div>' +
+        '<div class="stat-card" style="border-left-color:#16a34a"><p class="text-xs font-bold text-gray-400 uppercase">Taxas de entrega</p><p class="font-black text-lg text-green-600">' + brl(d.tot.taxa) + '</p><p style="font-size:.62rem;color:#9ca3af">só entregues</p></div>' +
+        '<div class="stat-card" style="border-left-color:#0369a1"><p class="text-xs font-bold text-gray-400 uppercase">Comissão entregadores</p><p class="font-black text-lg" style="color:#0369a1">' + brl(d.tot.cEnt) + '</p><p style="font-size:.62rem;color:#9ca3af">' + c.pctEnt + '% da taxa</p></div>' +
+        '<div class="stat-card" style="border-left-color:#7c3aed"><p class="text-xs font-bold text-gray-400 uppercase">Comissão brigada</p><p class="font-black text-lg" style="color:#7c3aed">' + brl(d.tot.cBri) + '</p><p style="font-size:.62rem;color:#9ca3af">' + c.pctBri + '% dos itens</p></div>' +
+        '<div class="stat-card" style="border-left-color:#0f2340"><p class="text-xs font-bold text-gray-400 uppercase">Líquido da casa</p><p class="font-black text-lg" style="color:#0f2340">' + brl(liquido) + '</p><p style="font-size:.62rem;color:#9ca3af">itens + taxas − comissões</p></div>' +
+      '</div>' +
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="' + th + ';text-align:left">Motoboy</th><th style="' + th + '">Entregas</th><th style="' + th + '">Itens</th><th style="' + th + '">Taxas</th><th style="' + th + '">Comissão entreg.</th><th style="' + th + '">Comissão brigada</th></tr></thead><tbody>' + linhas + '</tbody>' +
+      (d.linhas.length ? '<tfoot><tr style="border-top:2px solid #0f2340"><td style="padding:6px 8px;font-weight:900;font-size:.78rem">TOTAL</td><td style="' + td + ';font-weight:900">' + d.tot.n + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.sub) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.taxa) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.cEnt) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.cBri) + '</td></tr></tfoot>' : '') + '</table></div>' +
+      (d.andamento.n ? '<p style="font-size:.72rem;color:#b45309;margin-top:8px">⏳ ' + d.andamento.n + ' pedido(s) ainda em andamento (' + brl(d.andamento.sub) + ' em itens) — entram no fechamento quando forem marcados como entregues.</p>' : '') +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn-primary px-4 py-2 text-xs" type="button" onclick="ccDlCopiarFechamento()">📋 Copiar fechamento</button></div>' +
+      '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:.75rem;font-weight:800;color:#0f2340">⚙️ Regras de valores e comissões</summary>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:8px">' +
+          '<label style="font-size:.68rem;font-weight:700;color:#6b7280">Taxa de entrega padrão (R$)<input id="dl-cfg-taxa" type="number" step="0.01" min="0" value="' + c.taxa + '" style="' + campo + '"></label>' +
+          '<label style="font-size:.68rem;font-weight:700;color:#6b7280">Tempo estimado padrão (min)<input id="dl-cfg-eta" type="number" step="1" min="1" value="' + c.eta + '" style="' + campo + '"></label>' +
+          '<label style="font-size:.68rem;font-weight:700;color:#6b7280">% da taxa p/ entregador<input id="dl-cfg-ent" type="number" step="1" min="0" max="100" value="' + c.pctEnt + '" style="' + campo + '"></label>' +
+          '<label style="font-size:.68rem;font-weight:700;color:#6b7280">% dos itens p/ brigada<input id="dl-cfg-bri" type="number" step="0.5" min="0" max="100" value="' + c.pctBri + '" style="' + campo + '"></label>' +
+        '</div><button class="btn-primary px-4 py-2 text-xs" style="margin-top:8px" type="button" onclick="ccDlSalvarCfg()">💾 Salvar regras</button>' +
+        '<p style="font-size:.64rem;color:#9ca3af;margin-top:6px">Vale para pedidos NOVOS: cada pedido guarda as comissões calculadas na hora em que foi criado.</p></details>';
+  };
+  window.ccDlSalvarCfg = function () {
+    var v = function (id) { return parseFloat((document.getElementById(id) || {}).value); };
+    var taxa = v('dl-cfg-taxa'), eta = v('dl-cfg-eta'), pe = v('dl-cfg-ent'), pb = v('dl-cfg-bri');
+    if ([taxa, eta, pe, pb].some(function (n) { return !isFinite(n) || n < 0; }) || pe > 100 || pb > 100) { if (typeof toast === 'function') toast('⚠️ Confira os valores (porcentagens de 0 a 100).'); return; }
+    config.taxaEntrega = taxa; config.dlTempoPadraoMin = Math.round(eta); config.comissaoEntregadorPct = pe; config.comissaoBrigadaPct = pb;
+    if (typeof salvar === 'function') salvar('config', config);
+    if (typeof toast === 'function') toast('✅ Regras do Delivery salvas');
+    window.ccDlRenderFinanceiro();
+  };
+  window.ccDlCopiarFechamento = function () {
+    var d = window.__ccDlFech; if (!d) return;
+    var t = '🛵 FECHAMENTO DELIVERY — ' + d.iso.split('-').reverse().join('/') + '\n';
+    d.linhas.forEach(function (r) { t += '\n' + r.nome + ': ' + r.n + ' entrega(s) · itens ' + brl(r.sub) + ' · taxas ' + brl(r.taxa) + ' · comissão entregador ' + brl(r.cEnt) + ' · comissão brigada ' + brl(r.cBri); });
+    t += '\n\nTOTAL: ' + d.tot.n + ' entrega(s) · itens ' + brl(d.tot.sub) + ' · taxas ' + brl(d.tot.taxa) + ' · comissões ' + brl(d.tot.cEnt + d.tot.cBri) + ' · líquido da casa ' + brl(d.tot.sub + d.tot.taxa - d.tot.cEnt - d.tot.cBri);
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('📋 Fechamento copiado'); }).catch(function () { toast('Não consegui copiar automaticamente.'); });
+  };
+
+  /* ── Cartão de fechamento dentro do CAIXA (somente leitura, não mexe nos totais do Caixa) ── */
+  window.ccDlCardCaixa = function () {
+    var cx = document.getElementById('view-caixa'); if (!cx || cx.getAttribute('data-bloqueado')) return;
+    var d = agrupar(diaISO(new Date())), liquido = r2(d.tot.sub + d.tot.taxa - d.tot.cEnt - d.tot.cBri);
+    var el = document.getElementById('cc-dl-caixa-card');
+    if (!el) { el = document.createElement('div'); el.id = 'cc-dl-caixa-card'; el.className = 'admin-card mb-4'; cx.insertBefore(el, cx.firstChild); }
+    else if (el.parentNode === cx && cx.firstChild !== el) cx.insertBefore(el, cx.firstChild);
+    el.innerHTML = '<p class="font-bold text-sm uppercase tracking-widest text-orange-400 mb-2">🛵 Delivery — fechamento de hoje</p>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;font-size:.78rem">' +
+      '<div><span style="color:#6b7280">Entregas</span><br><b>' + d.tot.n + '</b></div>' +
+      '<div><span style="color:#6b7280">Itens</span><br><b>' + brl(d.tot.sub) + '</b></div>' +
+      '<div><span style="color:#6b7280">Taxas</span><br><b>' + brl(d.tot.taxa) + '</b></div>' +
+      '<div><span style="color:#0369a1">Comissão entreg.</span><br><b>' + brl(d.tot.cEnt) + '</b></div>' +
+      '<div><span style="color:#7c3aed">Comissão brigada</span><br><b>' + brl(d.tot.cBri) + '</b></div>' +
+      '<div><span style="color:#0f2340">Líquido da casa</span><br><b>' + brl(liquido) + '</b></div></div>' +
+      (d.andamento.n ? '<p style="font-size:.7rem;color:#b45309;margin-top:6px">⏳ ' + d.andamento.n + ' em andamento, ainda fora do fechamento.</p>' : '');
+  };
+
+  /* ── Posição ao vivo dos motoboys (lê a tabela alimentada pela visão do Motoboy) ── */
+  function distM(a, b) {
+    var R = 6371000, r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lng - a.lng) * r;
+    var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  window.ccDlPollPosicoes = function () {
+    var v = document.getElementById('view-delivery'); if (!v || !v.offsetParent || typeof ccGetSupabaseClient !== 'function') return;
+    var sb = ccGetSupabaseClient(), emp = window.COOKCONTROL_EMPRESA_ID_ATIVA || '';
+    try {
+      sb.from('entregadores_posicao').select('motoboy,latitude,longitude,atualizado_em,pedido_id').eq('empresa_id', emp).then(function (r) {
+        if (!r || r.error || !Array.isArray(r.data)) return;
+        var por = {}; r.data.forEach(function (x) { por[String(x.motoboy || '').trim().toLowerCase()] = x; });
+        lista().forEach(function (p) {
+          var el = document.querySelector('[data-dl-pos="' + (window.CSS && CSS.escape ? CSS.escape(p.id) : p.id) + '"]'); if (!el) return;
+          var x = por[String(p.motoboy || '').trim().toLowerCase()];
+          if (!x || p.status === 'entregue' || p.status === 'cancelado') { el.textContent = ''; return; }
+          var seg = Math.max(0, Math.round((Date.now() - new Date(x.atualizado_em)) / 1000));
+          var txt = '📡 Motoboy ' + (seg > 300 ? 'sem sinal há ' + Math.round(seg / 60) + ' min' : 'atualizado há ' + (seg < 90 ? seg + 's' : Math.round(seg / 60) + ' min'));
+          if (p.latitude && p.longitude) { var m = distM({ lat: x.latitude, lng: x.longitude }, { lat: Number(p.latitude), lng: Number(p.longitude) }); txt += ' · a ' + (m >= 1000 ? (m / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(m) + ' m') + ' do cliente'; }
+          el.innerHTML = txt + ' · <a target="_blank" rel="noopener" style="text-decoration:underline" href="https://www.google.com/maps?q=' + x.latitude + ',' + x.longitude + '">ver no mapa</a>';
+        });
+      });
+    } catch (e) {}
+  };
+  setInterval(function () { try { window.ccDlPollPosicoes(); } catch (e) {} }, 20000);
+})();
+
+</script>
+<script id="cc-mod-05">
+/* ═══════════════════════════════════════════════════════════════════════
+   ETIQUETA PREMIUM DA MESA + DOWNLOADS (Blob + <a download>)
+   • Gerador de QR inline (sem CDN) com a logomarca oficial embutida no centro do código.
+   • Etiqueta 1200×1700 px fiel à foto da Mesa 15: título, bloco preto "MESA/N", QR com cantos, "COMO PEDIR".
+   • Logo/banner isolados baixam pelo mesmo caminho (Blob → a[download]; iOS usa a folha de compartilhar → Fotos).
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var FONTE = 'Arial, Helvetica, sans-serif';
+  var cacheLogo = { src: null, img: null };
+
+  window.ccLogoSrc = function () {
+    var c = (typeof config !== 'undefined' && config) || {};
+    return (c.designLogo && String(c.designLogo).trim()) || ((window.COOKCONTROL_CONFIG || {}).fallbackLogo) || '';
+  };
+  function carregaImg(url, cors) {
+    return new Promise(function (res) { var i = new Image(); if (cors) i.crossOrigin = 'anonymous'; i.onload = function () { res(i.width ? i : null); }; i.onerror = function () { res(null); }; i.src = url; });
+  }
+  /* Tenta: data: → fetch(blob) → <img crossOrigin>. Nunca devolve imagem "contaminada" (não deixaria exportar o PNG). */
+  function srcParaImg(src) {
+    if (!src) return Promise.resolve(null);
+    if (/^data:/.test(src)) return carregaImg(src, false);
+    return fetch(src, { mode: 'cors', cache: 'force-cache' })
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.blob(); })
+      .then(function (b) { return carregaImg(URL.createObjectURL(b), false); })
+      .catch(function () { return carregaImg(src, true); });
+  }
+  /* Recorta a margem transparente/branca em volta da arte (o círculo passa a ocupar toda a área do logo). */
+  function recortaMargem(img) {
+    try {
+      var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      var x = cv.getContext('2d'); x.drawImage(img, 0, 0);
+      var d = x.getImageData(0, 0, w, h).data, x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (var yy = 0; yy < h; yy++) for (var xx = 0; xx < w; xx++) {
+        var i = (yy * w + xx) * 4, vazio = d[i + 3] < 12 || (d[i] > 244 && d[i + 1] > 244 && d[i + 2] > 244);
+        if (!vazio) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+      }
+      if (x1 < 0 || (x1 - x0) < w * 0.15) return img;
+      var o = document.createElement('canvas'); o.width = x1 - x0 + 1; o.height = y1 - y0 + 1;
+      o.getContext('2d').drawImage(cv, x0, y0, o.width, o.height, 0, 0, o.width, o.height);
+      o.src = o.toDataURL('image/png');   /* a impressão A4 usa <img src> */
+      return o;
+    } catch (e) { return img; }
+  }
+  window.ccLogoImg = function () {
+    var cfg = (typeof config !== 'undefined' && config) || {}, fb = (window.COOKCONTROL_CONFIG || {}).fallbackLogo;
+    var fontes = [cfg.designLogo && String(cfg.designLogo).trim(), fb].filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+    var chave = fontes.join('|');
+    if (cacheLogo.src === chave && cacheLogo.img) return Promise.resolve(cacheLogo.img);
+    return fontes.reduce(function (p, f) { return p.then(function (img) { return img || srcParaImg(f); }); }, Promise.resolve(null))
+      .then(function (img) { if (img) img = recortaMargem(img); cacheLogo = { src: chave, img: img }; return img; });
+  };
+
+  /* ── Download: Blob + <a download>; iOS → folha de compartilhar (Salvar imagem = Fotos) ── */
+  window.ccBaixarBlob = function (blob, nome) {
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = nome; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 4000);
+  };
+  window.ccSalvarArquivo = function (blob, nome) {
+    var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (ios && navigator.canShare && window.File) {
+      try {
+        var f = new File([blob], nome, { type: blob.type });
+        if (navigator.canShare({ files: [f] })) {
+          return navigator.share({ files: [f], title: nome }).catch(function (e) { if (!e || e.name !== 'AbortError') window.ccBaixarBlob(blob, nome); });
+        }
+      } catch (e) {}
+    }
+    window.ccBaixarBlob(blob, nome);
+    return Promise.resolve();
+  };
+  function canvasParaBlob(cv) { return new Promise(function (res, rej) { cv.toBlob(function (b) { b ? res(b) : rej(new Error('toBlob')); }, 'image/png'); }); }
+  function slug(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'arquivo'; }
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function tz(t) { if (typeof window.toast === 'function') window.toast(t); }
+
+  /* ── Etiqueta (canvas) ───────────────────────────────────────────── */
+  function rr(x, px, py, w, h, r) {
+    x.beginPath(); x.moveTo(px + r, py); x.arcTo(px + w, py, px + w, py + h, r); x.arcTo(px + w, py + h, px, py + h, r);
+    x.arcTo(px, py + h, px, py, r); x.arcTo(px, py, px + w, py, r); x.closePath();
+  }
+  function ajusta(x, txt, peso, max, larg) { var s = max; while (s > 24) { x.font = peso + ' ' + s + 'px ' + FONTE; if (x.measureText(txt).width <= larg) break; s -= 2; } return s; }
+  function espacado(x, txt, cx, y, esp) {
+    var ws = txt.split('').map(function (ch) { return x.measureText(ch).width; }), tot = ws.reduce(function (a, b) { return a + b; }, 0) + esp * (txt.length - 1), px = cx - tot / 2;
+    x.textAlign = 'left'; txt.split('').forEach(function (ch, i) { x.fillText(ch, px, y); px += ws[i] + esp; });
+  }
+  function runs(x, partes, px, y) { x.textAlign = 'left'; partes.forEach(function (p) { x.font = (p[1] ? 'bold ' : '') + '42px ' + FONTE; x.fillText(p[0], px, y); px += x.measureText(p[0]).width; }); }
+
+  window.ccEtiquetaCanvas = function (mesa) {
+    return window.ccLogoImg().then(function (logo) {
+      var W = 1200, H = 1700, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      var x = cv.getContext('2d'), link = gerarLinkCliente(mesa);
+      var titulo = ((typeof config !== 'undefined' && config && config.qrTituloEtiqueta) || 'CARDÁPIO BEACH FAROL').toUpperCase();
+      x.fillStyle = '#fff'; x.fillRect(0, 0, W, H);
+      x.strokeStyle = '#000'; x.lineWidth = 6; rr(x, 18, 18, W - 36, H - 36, 36); x.stroke();
+
+      /* cabeçalho: logomarca + título */
+      if (logo && logo.width) {
+        var lh = 120, lw = logo.width * lh / logo.height; if (lw > 460) { lw = 460; lh = logo.height * lw / logo.width; }
+        x.drawImage(logo, (W - lw) / 2, 50 + (120 - lh) / 2, lw, lh);
+      }
+      x.fillStyle = '#000'; x.textBaseline = 'alphabetic'; x.textAlign = 'center';
+      var ft = ajusta(x, titulo, 'bold', 80, W - 150); x.font = 'bold ' + ft + 'px ' + FONTE; x.fillText(titulo, W / 2, 252);
+
+      /* bloco preto MESA / número */
+      x.fillStyle = '#000'; rr(x, 70, 296, W - 140, 440, 42); x.fill();
+      x.fillStyle = '#fff'; x.font = 'bold 56px ' + FONTE; espacado(x, 'MESA', W / 2, 372, 24);
+      var num = pad2(mesa), fn = ajusta(x, num, 'bold', 340, W - 260);
+      x.font = 'bold ' + fn + 'px ' + FONTE; x.textAlign = 'center'; x.fillText(num, W / 2, 400 + (336 + fn * 0.716) / 2);
+
+      /* QR com cantos e logomarca no centro */
+      var qs = 480, qx = (W - qs) / 2, qy = 790;
+      window.ccQrDesenhar(x, qx, qy, qs, link, { logo: logo, qz: 0, nivel: 'H' });
+      x.strokeStyle = '#000'; x.lineWidth = 9; x.lineCap = 'butt';
+      var bx = qx - 36, by = qy - 36, bs = qs + 72, bl = 66;
+      [[bx, by, 1, 1], [bx + bs, by, -1, 1], [bx, by + bs, 1, -1], [bx + bs, by + bs, -1, -1]].forEach(function (c) {
+        x.beginPath(); x.moveTo(c[0], c[1] + c[3] * bl); x.lineTo(c[0], c[1]); x.lineTo(c[0] + c[2] * bl, c[1]); x.stroke();
+      });
+
+      /* COMO PEDIR */
+      var ix = 190; x.fillStyle = '#000'; x.textAlign = 'left'; x.font = 'bold 44px ' + FONTE; x.fillText('COMO PEDIR:', ix, 1390);
+      var passos = [
+        [['Abra a ', 0], ['Câmera', 1], [' do seu celular', 0]],
+        [['Aponte para o ', 0], ['quadrado acima', 1]],
+        [['Toque no ', 0], ['link', 1], [' que aparecer na tela', 0]]
+      ];
+      passos.forEach(function (p, i) {
+        var cy = 1458 + i * 76;
+        x.fillStyle = '#000'; x.beginPath(); x.arc(ix + 24, cy - 14, 25, 0, Math.PI * 2); x.fill();
+        x.fillStyle = '#fff'; x.font = 'bold 32px ' + FONTE; x.textAlign = 'center'; x.fillText(String(i + 1), ix + 24, cy - 3);
+        x.fillStyle = '#000'; runs(x, p, ix + 72, cy);
+      });
+      return cv;
+    });
+  };
+
+  window.ccBaixarEtiquetaMesa = function (mesa) {
+    mesa = parseInt(mesa || (document.getElementById('cli-mesa-sel') || {}).value, 10);
+    if (!mesa) { tz('Selecione a mesa primeiro!'); return Promise.resolve(); }
+    return window.ccLogoImg().then(function (l) { if (!l) tz('⚠️ Logomarca não encontrada (cadastre em Admin → Identidade Visual). Etiqueta gerada SEM logo.'); })
+      .then(function () { return window.ccEtiquetaCanvas(mesa); }).then(canvasParaBlob).then(function (b) {
+      return window.ccSalvarArquivo(b, 'etiqueta-mesa-' + pad2(mesa) + '.png');
+    }).then(function () { tz('📥 Etiqueta da Mesa ' + pad2(mesa) + ' baixada'); })
+      .catch(function (e) { console.warn('[etiqueta]', e); tz('⚠️ Não foi possível gerar a etiqueta.'); });
+  };
+
+  /* QR dos links (Cardápio Digital / Delivery Online etc.): PNG nítido 1024 px com a logo no centro */
+  window.ccBaixarQRLink = function (chave, rotulo) {
+    var urls = typeof getCardapioURLs === 'function' ? getCardapioURLs() : {}, link = urls[chave];
+    if (!link) { tz('⚠️ Link indisponível'); return Promise.resolve(); }
+    return window.ccLogoImg().then(function (logo) {
+      var cv = document.createElement('canvas'); cv.width = cv.height = 1024;
+      window.ccQrDesenhar(cv.getContext('2d'), 0, 0, 1024, link, { logo: logo, qz: 4, nivel: 'H' });
+      return canvasParaBlob(cv);
+    }).then(function (b) { return window.ccSalvarArquivo(b, 'qr-' + slug(rotulo || chave) + '.png'); })
+      .then(function () { tz('📥 QR baixado'); })
+      .catch(function () { tz('⚠️ Não foi possível gerar o QR.'); });
+  };
+
+  /* Logomarca / Banner isolados */
+  window.ccBaixarImagemMarca = function (tipo) {
+    var c = (typeof config !== 'undefined' && config) || {}, fb = window.COOKCONTROL_CONFIG || {};
+    var src = tipo === 'logo' ? (c.designLogo || fb.fallbackLogo) : (c.designBanner || fb.fallbackBanner);
+    if (!src) { tz('⚠️ Nenhuma imagem cadastrada ainda.'); return Promise.resolve(); }
+    return fetch(src, { mode: 'cors' }).then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.blob(); }).then(function (b) {
+      var ext = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'image/gif': 'gif' })[b.type] || 'png';
+      var nome = (tipo === 'logo' ? 'logomarca-' : 'banner-') + slug(c.nome || 'estabelecimento') + '.' + ext;
+      return window.ccSalvarArquivo(b, nome).then(function () { tz('📥 ' + (tipo === 'logo' ? 'Logomarca' : 'Banner') + ' baixado'); });
+    }).catch(function () { tz('⚠️ Não consegui ler a imagem (arquivo ausente ou bloqueado pelo servidor).'); });
+  };
+
+  window._ccEtiquetaTk = 0;
+})();
+
+</script>
+<script id="cc-mod-02">
+/* ═══════════════════════════════════════════════════════════════════════
+   PAREDE DE ACESSO — isolamento de telas por parâmetro de URL + PIN do Proprietário
+   Fica POR FORA das interfaces: só lê o papel já calculado pelo SirAccess, remove do DOM o que o
+   papel não pode ver e bloqueia showView(). NÃO toca no motor de mesas (QR/GPS/mapa canvas/reset/60px).
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var P = 'solbahia_';
+  var ROLES_PIN = ['livre', 'dono', 'gerente', 'admin', 'caixa'];           // exigem PIN do Proprietário
+  var PERMITE = {                                                           // views que cada papel restrito enxerga
+    cliente:   ['mesa-cliente', 'cardapio'],
+    atendente: ['atendente', 'mesas', 'cardapio'],
+    motoboy:   []                                                           // só o container #cc-motoboy-root
+  };
+  var HORAS_SESSAO = 12, MAX_ERROS = 5, BLOQ_SEG = 60;
+
+  function lsGet(k) { try { return localStorage.getItem(P + k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(P + k, v); } catch (e) {} }
+  function lsDel(k) { try { localStorage.removeItem(P + k); } catch (e) {} }
+  function papel() { try { return window.SirAccess && window.SirAccess.getRole(); } catch (e) { return null; } }
+
+  /* ── 1. Compartimentos de tela ───────────────────────────────────── */
+  function purgar(role) {
+    var permit = PERMITE[role]; if (!permit) return;
+    document.body.classList.add('cc-restrito', 'cc-restrito-' + role);
+    document.querySelectorAll('[id^="view-"]').forEach(function (el) {
+      var nome = el.id.slice(5);
+      if (permit.indexOf(nome) >= 0 || el.getAttribute('data-bloqueado')) return;
+      var stub = document.createElement('div');           /* mantém o id (nenhum getElementById(view) quebra), sem conteúdo */
+      stub.id = el.id; stub.hidden = true; stub.style.display = 'none';
+      stub.setAttribute('data-bloqueado', '1'); stub.innerHTML = '<!--bloqueado-->';
+      el.replaceWith(stub);
+    });
+    ['ab-clean-home', 'cc-capa-institucional'].forEach(function (id) { var e = document.getElementById(id); if (e) e.remove(); });
+    document.querySelectorAll('#nav-main [data-view]').forEach(function (b) { if (permit.indexOf(b.dataset.view) < 0) b.remove(); });
+    if (!document.getElementById('cc-parede-css')) {
+      var st = document.createElement('style'); st.id = 'cc-parede-css';
+      st.textContent = 'body.cc-restrito #ab-clean-home,body.cc-restrito #cc-capa-institucional{display:none!important}' +
+        'body.cc-restrito-motoboy #cc-topbar-wrapper,body.cc-restrito-motoboy #role-bar,body.cc-restrito-motoboy #nav-main-wrapper{display:none!important}';
+      document.head.appendChild(st);
+    }
+    /* Se algum script posterior tentar remontar a capa do dono, ela é removida de novo. */
+    if (!window.__ccParedeObs) {
+      window.__ccParedeObs = new MutationObserver(function () {
+        ['ab-clean-home', 'cc-capa-institucional'].forEach(function (id) { var e = document.getElementById(id); if (e) e.remove(); });
+      });
+      window.__ccParedeObs.observe(document.body, { childList: true });
+    }
+  }
+
+  function guardarShowView(role) {
+    var permit = PERMITE[role];
+    var atual = window.showView;
+    if (typeof atual !== 'function' || atual.__ccGuard) return;
+    var g = function (name, btn) {
+      if (permit && permit.indexOf(name) < 0) { console.warn('[acesso] tela bloqueada para ' + role + ':', name); return; }
+      var r = atual.apply(this, arguments);
+      try { aposTrocaDeTela(name); } catch (e) {}
+      return r;
+    };
+    g.__ccGuard = true;
+    window.showView = g;
+  }
+
+  function aposTrocaDeTela(name) {
+    if (name === 'caixa' && typeof window.ccDlCardCaixa === 'function') setTimeout(window.ccDlCardCaixa, 150);
+    if (name === 'admin') setTimeout(injetarCardPin, 350);
+  }
+
+  /* ── 2. PIN do Proprietário ──────────────────────────────────────── */
+  function hashPin(pin) {
+    var sal = 'cc-pin|' + ((window.COOKCONTROL_CONFIG && window.COOKCONTROL_CONFIG.empresaId) || 'cc') + '|' + pin;
+    if (window.crypto && crypto.subtle && window.TextEncoder) {
+      return crypto.subtle.digest('SHA-256', new TextEncoder().encode(sal)).then(function (b) {
+        return Array.prototype.map.call(new Uint8Array(b), function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+      });
+    }
+    var h1 = 5381, h2 = 52711;
+    for (var i = 0; i < sal.length; i++) { var c = sal.charCodeAt(i); h1 = ((h1 << 5) + h1) ^ c; h2 = ((h2 << 5) + h2) ^ c; }
+    return Promise.resolve('f' + (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16));
+  }
+  function sessaoValida() { return parseInt(lsGet('pin_dono_ok_ate') || '0', 10) > Date.now(); }
+  function liberar() {
+    window.__ccParedeOk = true;
+    var s = document.getElementById('cc-prelock'); if (s) s.remove();
+    var o = document.getElementById('cc-pin-dono'); if (o) o.remove();
+    document.body.classList.remove('cc-bloqueado');
+  }
+  function abrirSessao() { lsSet('pin_dono_ok_ate', String(Date.now() + HORAS_SESSAO * 3600 * 1000)); }
+
+  function mostrarPin(modo) {            // modo: 'entrar' | 'criar' | 'trocar'
+    var tem = !!lsGet('pin_dono_hash');
+    modo = modo || (tem ? 'entrar' : 'criar');
+    var velho = document.getElementById('cc-pin-dono'); if (velho) velho.remove();
+    document.body.classList.add('cc-bloqueado');
+    var ov = document.createElement('div'); ov.id = 'cc-pin-dono';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483600;background:#0f2340;display:flex;align-items:center;justify-content:center;padding:20px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;visibility:visible!important';
+    var caixa = document.createElement('div');
+    caixa.style.cssText = 'background:#fff;border-radius:20px;max-width:360px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.4)';
+    var titulo = { entrar: '🔐 Acesso do Proprietário', criar: '🔐 Criar PIN do Proprietário', trocar: '🔐 Trocar PIN' }[modo];
+    var sub = { entrar: 'Digite seu PIN para abrir o painel completo.', criar: 'Primeiro acesso neste aparelho: defina um PIN de 4 a 8 dígitos.', trocar: 'Informe o PIN atual e o novo PIN.' }[modo];
+    caixa.innerHTML = '<h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f2340;font-weight:900"></h2><p style="margin:0 0 14px;font-size:.8rem;color:#6b7280"></p>';
+    caixa.children[0].textContent = titulo; caixa.children[1].textContent = sub;
+    function campo(id, ph) {
+      var i = document.createElement('input'); i.type = 'password'; i.id = id; i.placeholder = ph; i.inputMode = 'numeric'; i.autocomplete = 'off'; i.maxLength = 8;
+      i.style.cssText = 'width:100%;box-sizing:border-box;margin-bottom:10px;padding:12px;border:2px solid #e5e7eb;border-radius:12px;font-size:1.1rem;text-align:center;letter-spacing:.3em';
+      caixa.appendChild(i); return i;
+    }
+    var atual = (modo === 'entrar' || modo === 'trocar') ? campo('cc-pin-atual', modo === 'trocar' ? 'PIN atual' : 'PIN') : null;
+    var novo = (modo === 'criar' || modo === 'trocar') ? campo('cc-pin-novo', 'Novo PIN (4–8 dígitos)') : null;
+    var conf = novo ? campo('cc-pin-conf', 'Repita o novo PIN') : null;
+    var msg = document.createElement('p'); msg.style.cssText = 'min-height:18px;margin:0 0 10px;font-size:.78rem;color:#dc2626;font-weight:700;text-align:center'; caixa.appendChild(msg);
+    var btn = document.createElement('button'); btn.type = 'button'; btn.textContent = modo === 'entrar' ? 'Entrar' : 'Salvar PIN';
+    btn.style.cssText = 'width:100%;padding:13px;border:0;border-radius:12px;background:#0f2340;color:#fff;font-weight:800;font-size:.95rem;cursor:pointer';
+    caixa.appendChild(btn);
+    if (modo === 'trocar') {
+      var cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancelar';
+      cancel.style.cssText = 'width:100%;margin-top:8px;padding:11px;border:0;border-radius:12px;background:#f3f4f6;color:#374151;font-weight:700;cursor:pointer';
+      cancel.onclick = function () { ov.remove(); document.body.classList.remove('cc-bloqueado'); };
+      caixa.appendChild(cancel);
+    }
+    var aviso = document.createElement('p'); aviso.style.cssText = 'margin:14px 0 0;font-size:.68rem;color:#9ca3af;text-align:center';
+    aviso.textContent = 'O PIN fica salvo só neste aparelho. Esqueceu? Limpe os dados do site e crie outro.';
+    caixa.appendChild(aviso);
+    ov.appendChild(caixa); document.body.appendChild(ov);
+    (atual || novo).focus();
+
+    var erros = 0;
+    function erro(t) { msg.textContent = t; }
+    function ok4a8(v) { return /^\d{4,8}$/.test(v); }
+    btn.onclick = function () {
+      var bloq = parseInt(lsGet('pin_dono_bloq_ate') || '0', 10);
+      if (bloq > Date.now()) { erro('Muitas tentativas. Aguarde ' + Math.ceil((bloq - Date.now()) / 1000) + 's.'); return; }
+      if (modo === 'criar') {
+        if (!ok4a8(novo.value)) { erro('Use de 4 a 8 números.'); return; }
+        if (novo.value !== conf.value) { erro('Os dois PINs não conferem.'); return; }
+        hashPin(novo.value).then(function (h) { lsSet('pin_dono_hash', h); abrirSessao(); liberar(); });
+        return;
+      }
+      hashPin(atual.value).then(function (h) {
+        if (h !== lsGet('pin_dono_hash')) {
+          erros++; if (erros >= MAX_ERROS) { lsSet('pin_dono_bloq_ate', String(Date.now() + BLOQ_SEG * 1000)); erros = 0; erro('PIN incorreto. Bloqueado por ' + BLOQ_SEG + 's.'); }
+          else erro('PIN incorreto (' + erros + '/' + MAX_ERROS + ').');
+          atual.value = ''; return;
+        }
+        if (modo === 'entrar') { abrirSessao(); liberar(); return; }
+        if (!ok4a8(novo.value)) { erro('Use de 4 a 8 números.'); return; }
+        if (novo.value !== conf.value) { erro('Os dois PINs não conferem.'); return; }
+        hashPin(novo.value).then(function (h2) { lsSet('pin_dono_hash', h2); abrirSessao(); ov.remove(); document.body.classList.remove('cc-bloqueado'); if (typeof window.toast === 'function') window.toast('✅ PIN alterado'); });
+      });
+    };
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Enter') btn.click(); });
+  }
+
+  function injetarCardPin() {
+    var adm = document.getElementById('view-admin');
+    if (!adm || document.getElementById('cc-card-pin')) return;
+    var c = document.createElement('div'); c.id = 'cc-card-pin'; c.className = 'admin-card mb-4';
+    c.innerHTML = '<h3 class="font-bold text-sm text-gray-600 mb-2">🔐 PIN do Proprietário</h3>' +
+      '<p class="text-xs text-gray-400 mb-3">Protege o painel completo (Admin, Caixa, Relatórios) em acesso sem parâmetros na URL. A sessão dura ' + HORAS_SESSAO + 'h.</p>' +
+      '<button class="btn-primary px-4 py-2.5 text-xs" type="button" id="cc-pin-trocar">🔑 Trocar PIN</button> ' +
+      '<button class="btn-ghost px-4 py-2.5 text-xs" type="button" id="cc-pin-sair">🔒 Bloquear agora</button>';
+    adm.insertBefore(c, adm.firstChild);
+    document.getElementById('cc-pin-trocar').onclick = function () { mostrarPin('trocar'); };
+    document.getElementById('cc-pin-sair').onclick = function () { lsDel('pin_dono_ok_ate'); location.reload(); };
+  }
+
+  /* ── 3. Orquestração ─────────────────────────────────────────────── */
+  var aplicado = null;
+  function aplicar(role) {
+    if (!role || aplicado === role) return;
+    aplicado = role;
+    if (PERMITE[role]) { purgar(role); guardarShowView(role); }
+    else guardarShowView(role);                               /* todos os papéis: encadeia os gatilhos pós-troca de tela */
+    if (role === 'motoboy' && typeof window.ccMotoboyIniciar === 'function') window.ccMotoboyIniciar();
+    if (ROLES_PIN.indexOf(role) >= 0) { if (sessaoValida()) liberar(); else if (!document.getElementById('cc-pin-dono')) mostrarPin(); }
+    else liberar();
+  }
+
+  /* "Sair ↩" também derruba a sessão do PIN */
+  try {
+    if (window.SirAccess && !window.SirAccess.__ccPin) {
+      var logoutOrig = window.SirAccess.logout;
+      window.SirAccess.logout = function () { lsDel('pin_dono_ok_ate'); return logoutOrig.apply(this, arguments); };
+      window.SirAccess.__ccPin = true;
+    }
+  } catch (e) {}
+
+  window.ccPinDonoAbrir = mostrarPin;
+  window.addEventListener('sir:role_ready', function (ev) { aplicado = null; aplicar(ev && ev.detail && ev.detail.role); });
+  var r0 = papel();
+  if (r0) aplicar(r0);
+  /* showView é redefinido várias vezes ao longo do arquivo: reafirma a guarda depois do load completo. */
+  window.addEventListener('load', function () {
+    setTimeout(function () { var r = papel(); if (r) { aplicado = null; aplicar(r); } }, 600);
+  });
+})();
+
 </script>
 </body></html>
