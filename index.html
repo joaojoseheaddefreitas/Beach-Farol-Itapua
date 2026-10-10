@@ -1,5 +1,22 @@
 <!DOCTYPE html>
 <html lang="pt-BR"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<script id="cc-anti-flash-cliente">
+/* Link de cliente (?mesa=, ?role=cliente, ?view=delivery) em aparelho que NÃO é da equipe:
+   esconde a capa/painel do dono ANTES de qualquer script rodar, para o cliente cair direto no cardápio. */
+(function(){try{
+  var q=new URLSearchParams(location.search);
+  var cli=q.get('mesa')||q.get('role')==='cliente'||q.get('view')==='delivery';
+  if(!cli)return;
+  var j=function(k){try{var v=localStorage.getItem('solbahia_'+k);return v===null?null:JSON.parse(v);}catch(e){return null;}};
+  var r=null;try{r=localStorage.getItem('solbahia_sir_role');}catch(e){}
+  var equipe=j('perfilAtendenteAtivo')===true||!!j('turnoAtivo')||['atendente','gerente','dono','admin','caixa','cozinheiro','motoboy'].indexOf(r)>=0;
+  if(equipe)return;
+  var st=document.createElement('style');
+  st.id='cc-anti-flash-cliente-css';
+  st.textContent='#ab-clean-home,#cc-capa-institucional,#cc-topbar-wrapper,#nav-main-wrapper,#role-bar{display:none!important}';
+  document.head.appendChild(st);
+}catch(e){}})();
+</script>
 
 <meta content="width=device-width, initial-scale=1.0" name="viewport">
 <title>Beach Farol Itapuã</title>
@@ -1928,11 +1945,18 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
 <div class="admin-card mb-4">
 <h3 class="font-bold text-sm text-gray-600 mb-3">🔳 Gerar QR Code da Mesa</h3>
 <div class="flex gap-3 items-end flex-wrap">
-<div class="flex-1 min-w-0">
+<div style="flex:1 1 200px;min-width:200px">
 <label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Número da Mesa</label>
 <select class="input-base" id="cli-mesa-sel" onchange="renderQRMesa()"><option value="">— Selecione —</option><option value="1">Mesa 01</option><option value="2">Mesa 02</option><option value="3">Mesa 03</option><option value="4">Mesa 04</option><option value="5">Mesa 05</option><option value="6">Mesa 06</option><option value="7">Mesa 07</option><option value="8">Mesa 08</option><option value="9">Mesa 09</option><option value="10">Mesa 10</option><option value="11">Mesa 11</option><option value="12">Mesa 12</option><option value="13">Mesa 13</option><option value="14">Mesa 14</option><option value="15">Mesa 15</option><option value="16">Mesa 16</option><option value="17">Mesa 17</option><option value="18">Mesa 18</option><option value="19">Mesa 19</option><option value="20">Mesa 20</option><option value="21">Mesa 21</option><option value="22">Mesa 22</option><option value="23">Mesa 23</option><option value="24">Mesa 24</option><option value="25">Mesa 25</option><option value="26">Mesa 26</option><option value="27">Mesa 27</option><option value="28">Mesa 28</option><option value="29">Mesa 29</option><option value="30">Mesa 30</option><option value="31">Mesa 31</option><option value="32">Mesa 32</option><option value="33">Mesa 33</option><option value="34">Mesa 34</option><option value="35">Mesa 35</option><option value="36">Mesa 36</option><option value="37">Mesa 37</option><option value="38">Mesa 38</option><option value="39">Mesa 39</option><option value="40">Mesa 40</option><option value="41">Mesa 41</option><option value="42">Mesa 42</option><option value="43">Mesa 43</option><option value="44">Mesa 44</option><option value="45">Mesa 45</option><option value="46">Mesa 46</option><option value="47">Mesa 47</option><option value="48">Mesa 48</option><option value="49">Mesa 49</option><option value="50">Mesa 50</option></select>
 </div>
+<div style="flex:1 1 200px;min-width:200px">
+<label class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Mesas a imprimir</label>
+<input class="input-base" id="cli-mesas-lista" placeholder="Ex.: 1-80 ou 1,5,12-20" autocomplete="off">
+</div>
+<div style="flex-basis:100%;height:0"></div>
+<button class="btn-primary px-4 py-2.5 text-xs whitespace-nowrap" onclick="imprimirQRMesa('lista')">🖨️ Imprimir Lista</button>
 <button class="btn-primary px-4 py-2.5 text-xs" onclick="imprimirQRMesa()">🖨️ Imprimir QR</button>
+<button class="btn-primary px-4 py-2.5 text-xs" onclick="imprimirQRMesa('todas')">🖨️ Imprimir Todas (4 por folha)</button>
 </div>
 <!-- QR exibido -->
 <div class="hidden mt-5" id="cli-qr-area">
@@ -3022,7 +3046,7 @@ function ccAbaterSaldoMesa(mesa) {
   try {
     const n = Number(mesa); if (!n || !isFinite(n)) return;
     const st = mesaStatus[n] || "livre";
-    const saldo = pedidosCozinha.filter(p => Number(p.mesa) === n && p.status !== "entregue").reduce((a, p) => a + (Number(p.total) || 0), 0);
+    const saldo = pedidosCozinha.filter(p => Number(p.mesa) === n && p.status !== "entregue" && !p.pago).reduce((a, p) => a + (Number(p.total) || 0), 0);
     const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
     if (emp && typeof ccAtualizarMesaSupabase === "function") ccAtualizarMesaSupabase(emp, n, st, saldo);
   } catch (e) { console.warn("[Saldo mesa]", e && e.message); }
@@ -3181,7 +3205,7 @@ function _enviarPedidoComNumero(numeroPedido, nomeCliente) {
 
   // Marcar mesa como ocupada
   // O saldo da mesa na nuvem acompanha o pedido (antes era sobrescrito com 0 a cada novo pedido).
-  const _saldoMesa = pedidosCozinha.filter(p => Number(p.mesa) === Number(S.mesa) && p.status !== "entregue").reduce((a, p) => a + (Number(p.total) || 0), 0) + (prePago ? 0 : tot);
+  const _saldoMesa = pedidosCozinha.filter(p => Number(p.mesa) === Number(S.mesa) && p.status !== "entregue" && !p.pago).reduce((a, p) => a + (Number(p.total) || 0), 0) + (prePago ? 0 : tot);
   ccSetMesaStatus(S.mesa, "ocupada", _saldoMesa);
 
   // Montar resumo
@@ -5970,9 +5994,10 @@ function confirmarPgto(metodo) {
   if(!_pedidoMaquininha) return;
   const ped = _pedidoMaquininha;
 
-  // 1. Pedido → entregue
+  // 1. Pedido → PAGO. O status de preparo/entrega NÃO muda: cliente que paga adiantado continua na mesa e o pedido
+  //    pago que ainda não foi feito/entregue segue na fila da cozinha e do garçom (antes sumia ao pagar).
   const pedCoz = pedidosCozinha.find(p=>p.id===ped.id);
-  if(pedCoz){ pedCoz.status = "entregue"; if(!pedCoz.entregueEm) pedCoz.entregueEm = new Date().toISOString(); }
+  if(pedCoz){ pedCoz.pago = true; pedCoz.pagoEm = new Date().toISOString(); }
   salvar("pedidosCozinha_v1", pedidosCozinha);
 
   // 2. Pagamento só abate o saldo na nuvem — a mesa NÃO muda de cor/status (só "Liberar Mesa" manual faz isso)
@@ -6446,7 +6471,7 @@ function _ccEstadoGrupo(p) {
   const peds = pedidosCozinha.filter(x => g.includes(Number(x.mesa)) && x.status !== "entregue");
   const cham = g.some(n => _ccMesasChamandoGarcom.has(n));
   const total = cham ? g.reduce((a, n) => a + (Number(_ccMesasChamandoGarcomTotal[n]) || 0), 0)
-                     : peds.reduce((a, x) => a + (Number(x.total) || 0), 0);
+                     : peds.filter(x => !x.pago).reduce((a, x) => a + (Number(x.total) || 0), 0); // pedido já pago não entra no total a cobrar
   return {
     g, peds, cham, total,
     conta: g.some(n => mesaStatus[n] === "conta"),
@@ -7316,9 +7341,15 @@ function popularSelectCliente() {
 
 // ─── GERAR LINK DO CLIENTE ────────────────────────────────────
 function gerarLinkCliente(mesa) {
-  // Gera um link local com hash que abre o cardápio já na mesa certa
-  const base = window.location.href.split("#")[0].split("?")[0];
-  return base + "?mesa=" + mesa + "#cliente-mesa";
+  // Link oficial do QR da mesa: endereço de produção FIXO (nunca o endereço em que o admin está aberto) + ?mesa=N&role=cliente, sem "#".
+  const modelo = "https://beach-farol-itapua.vercel.app/?mesa={mesa}&role=cliente";
+  // TRAVA DE SEGURANÇA: higieniza (espaços e caracteres invisíveis) e RECUSA se {mesa} ou role=cliente sumirem, ou se houver "#".
+  const limpo = String(modelo).replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, "");
+  const num = String(mesa).replace(/[^0-9]/g, "");
+  if (!num || limpo.indexOf("{mesa}") === -1 || limpo.indexOf("role=cliente") === -1 || limpo.indexOf("#") !== -1) {
+    throw new Error("Link do QR inválido (faltou {mesa} ou role=cliente, ou há '#'). Impressão bloqueada.");
+  }
+  return limpo.replace("{mesa}", num);
 }
 
 // ─── GERAR QR DA MESA ─────────────────────────────────────────
@@ -7332,7 +7363,8 @@ async function renderQRMesa() {
   document.getElementById("cli-qr-mesa-label").textContent = `Mesa ${String(mesa).padStart(2,"0")}`;
   document.getElementById("cli-preview-mesa-num").textContent = String(mesa).padStart(2,"0");
 
-  const link = gerarLinkCliente(mesa);
+  let link;
+  try { link = gerarLinkCliente(mesa); } catch(e) { area.classList.add("hidden"); toast("⛔ " + e.message); return; }
   const linkInput = document.getElementById("cli-link-txt");
   if(linkInput) linkInput.value = link;
 
@@ -7340,11 +7372,11 @@ async function renderQRMesa() {
   const canvas = document.getElementById("cli-qr-canvas");
   canvas.innerHTML = "";
   if(window.QRCode) {
-    new QRCode(canvas, {text: link, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M});
+    new QRCode(canvas, {text: link, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H});
   } else {
     const s = document.createElement("script");
     s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
-    s.onload = () => new QRCode(canvas, {text: link, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M});
+    s.onload = () => new QRCode(canvas, {text: link, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.H});
     s.onerror = () => { canvas.innerHTML = `<div style="width:180px;height:180px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;border-radius:12px;font-size:.65rem;color:#6b7280;text-align:center;padding:12px">QR indisponível offline</div>`; };
     document.head.appendChild(s);
   }
@@ -7481,35 +7513,136 @@ function copiarLinkCliente() {
   navigator.clipboard.writeText(txt.value).then(()=>toast("📋 Link copiado!")).catch(()=>{ txt.select(); document.execCommand("copy"); toast("📋 Copiado!"); });
 }
 
-function imprimirQRMesa() {
-  const mesa = parseInt((document.getElementById("cli-mesa-sel")||{}).value);
-  if(!mesa) { toast("Selecione a mesa primeiro!"); return; }
-  const qrDiv = document.getElementById("cli-qr-canvas");
-  const nome = config.nome || "";
-  const w = window.open("","_blank","width=400,height=500");
-  w.document.write(`<!DOCTYPE html><html><head><title>QR Mesa ${mesa}</title>
-  <style>body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;background:#fff}
-  .box{border:3px solid #0f2340;border-radius:20px;padding:24px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.12)}
-  h1{font-size:1.8rem;font-weight:900;color:#0f2340;margin:0 0 4px}
-  p{color:#6b7280;font-size:.85rem;margin:0 0 12px}</style></head>
-  <body><div class="box">${qrDiv.innerHTML}
-  <h1>Mesa ${String(mesa).padStart(2,"0")}</h1>
-  <p>${nome}</p>
-  <p style="font-size:.7rem">📱 Escaneie para acompanhar seu pedido</p>
-  </div><script>window.onload=()=>window.print()<\/script>
-<style id="cc-v7-premium-banner-final">
-/* V7 PREMIUM — banner alinhado exatamente ao conjunto das 5 abas. */
-#ab-clean-home .abch-hero{width:calc(100% - 48px)!important;max-width:1180px!important;aspect-ratio:2 / 1!important;height:auto!important;min-height:0!important;max-height:none!important;margin:0 auto!important;border-radius:18px!important;overflow:hidden!important;box-shadow:0 10px 30px rgba(15,35,64,.18)!important}
-#ab-clean-home .abch-hero-bg{position:absolute!important;inset:0!important;background-size:cover!important;background-position:center center!important;background-repeat:no-repeat!important}
-#ab-clean-home .abch-hero-content{padding:28px 30px 28px!important}
-#ab-clean-home .abch-title{letter-spacing:-.02em!important}
-#ab-clean-home .abch-tabs{width:calc(100% - 48px)!important;max-width:1180px!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:12px!important;margin:16px auto 28px!important}
-#ab-clean-home .abch-tab{aspect-ratio:1/1!important;border-radius:15px!important;box-shadow:0 7px 20px rgba(15,35,64,.16)!important}
-@media(max-width:600px){#ab-clean-home .abch-hero{width:calc(100% - 20px)!important;aspect-ratio:2 / 1!important;border-radius:14px!important}#ab-clean-home .abch-tabs{width:calc(100% - 20px)!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important;margin:12px auto 20px!important}#ab-clean-home .abch-hero-content{padding:16px 16px 18px!important}#ab-clean-home .abch-title{font-size:clamp(1.35rem,7vw,2rem)!important}}
-</style>
+function imprimirQRMesa(alvo) {
+  // alvo: (vazio) = mesa selecionada | "lista" = campo "Mesas a imprimir" (ex.: 1-80 ou 1,5,12-20) | "todas" = mesas 1..numMesas | array com os números das mesas
+  let mesas;
+  if(Array.isArray(alvo)) mesas = alvo.map(n => parseInt(n)).filter(n => n > 0);
+  else if(alvo === "lista") {
+    const txt = String((document.getElementById("cli-mesas-lista")||{}).value || "").replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, "");
+    mesas = []; let ok = txt.length > 0;
+    txt.split(/[,;]/).forEach(p => {
+      if(!p) return;
+      const m = p.match(/^(\d{1,3})(?:[-–](\d{1,3}))?$/);
+      if(!m) { ok = false; return; }
+      const a = parseInt(m[1]), b = m[2] ? parseInt(m[2]) : a;
+      if(a < 1 || b < a) { ok = false; return; }
+      for(let n = a; n <= b; n++) mesas.push(n);
+    });
+    if(!ok) { toast("⚠️ Lista inválida. Exemplos: 1-80 ou 1,5,12-20 (mesas de 1 a 999)"); return; }
+  }
+  else if(alvo === "todas") { const total = parseInt(config.numMesas) || 50; mesas = Array.from({length: total}, (_, i) => i + 1); }
+  else { const m = parseInt((document.getElementById("cli-mesa-sel")||{}).value); mesas = m ? [m] : []; }
+  mesas = mesas.filter((n, i) => mesas.indexOf(n) === i);
+  if(!mesas.length) { toast("Selecione a mesa primeiro!"); return; }
 
-</body></html>`);
-  w.document.close();
+  // TRAVA: todos os links são gerados e validados ANTES de abrir qualquer janela de impressão.
+  let links;
+  try { links = mesas.map(n => gerarLinkCliente(n)); } catch(e) { toast("⛔ " + e.message); return; }
+
+  const NOME_RESTAURANTE = "CARDÁPIO BEACH FAROL";
+  const esc = t => String(t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  const montar = () => {
+    // QR gerado em alta resolução (correção de erro H); na folha ele é fixado em 4,3 cm x 4,3 cm.
+    const tmp = document.createElement("div");
+    tmp.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(tmp);
+    let cartoes;
+    try {
+      cartoes = mesas.map((n, i) => {
+        tmp.innerHTML = "";
+        new QRCode(tmp, {text: links[i], width: 600, height: 600, colorDark: "#000000", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.H});
+        return {n: n, src: tmp.querySelector("canvas").toDataURL("image/png")};
+      });
+    } catch(e) {
+      document.body.removeChild(tmp); toast("⚠️ Não foi possível gerar os QR Codes"); return;
+    }
+    document.body.removeChild(tmp);
+
+    let folhas = "";
+    for(let i = 0; i < cartoes.length; i += 4) {
+      folhas += '<section class="folha">' + cartoes.slice(i, i + 4).map(c =>
+        '<div class="cartao"><div class="moldura">'
+        + '<div class="topo"><div class="titulo">' + esc(NOME_RESTAURANTE) + '</div></div>'
+        + '<div class="mesa"><span class="rot">MESA</span><span class="num">' + String(c.n).padStart(2, "0") + '</span></div>'
+        + '<div class="qr"><svg class="cantos" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M2 16V2H16M84 2H98V16M98 84V98H84M16 98H2V84" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>'
+        + '<img src="' + c.src + '" alt="QR Mesa ' + c.n + '"></div>'
+        + '<div class="passos"><div class="tit">COMO PEDIR:</div>'
+        + '<div class="p"><span class="n">1</span><span>Abra a <b>Câmera</b> do seu celular</span></div>'
+        + '<div class="p"><span class="n">2</span><span>Aponte para o <b>quadrado acima</b></span></div>'
+        + '<div class="p"><span class="n">3</span><span>Toque no <b>link</b> que aparecer na tela</span></div></div>'
+        + '</div></div>').join("") + '</section>';
+    }
+    const nFolhas = Math.ceil(cartoes.length / 4);
+
+    // Pré-visualização DENTRO da própria página (sem popup): tela cheia com botão Imprimir.
+    const P = "#cc-qr-print ";
+    const css =
+      '@page{size:A4;margin:0}'
+    + '#cc-qr-print{position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;overflow:auto;background:#e5e7eb;font-family:Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact;--titulo:#000000;--numero:#000000;--cab:#000000;--mold:#000000;--acento:#000000}'
+    + '#cc-qr-print.colorido{--titulo:#D9480F;--numero:#0B6FB8;--cab:#D9480F;--mold:#0B6FB8;--acento:#FFB703}'
+    + P + '*{box-sizing:border-box}'
+    + P + '.barra{position:sticky;top:0;z-index:5;background:#0f2340;color:#fff;padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px}'
+    + P + '.barra select,' + P + '.barra button{font-size:14px;padding:8px 14px;border-radius:8px;border:0;cursor:pointer}'
+    + P + '.folha{width:210mm;height:296mm;padding:5mm;margin:8px auto;background:#fff;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;page-break-after:always;break-after:page;overflow:hidden}'
+    + P + '.cartao{border:0.5pt solid #CCCCCC;display:flex;padding:2mm;background:#fff;overflow:hidden}'
+    + P + '.moldura{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:space-between;border:1.4pt solid var(--mold);border-radius:3mm;padding:2mm 3mm;overflow:hidden}'
+    + P + '.topo{width:100%;height:9mm;display:flex;align-items:center;justify-content:center}'
+    + P + '.titulo{width:100%;text-align:center;font-weight:700;font-size:20pt;line-height:1.1;color:var(--titulo);text-transform:uppercase}'
+    + P + '.orn{display:flex;align-items:center;width:62mm;height:3mm}'
+    + P + '.orn .l{flex:1;height:0;border-top:1.6pt solid var(--acento)}'
+    + P + '.orn .sol{width:3mm;height:3mm;border-radius:50%;background:var(--titulo);margin:0 2mm}'
+    + P + '.mesa{width:92%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--numero);color:#fff;border-radius:3mm;padding:2mm 0 1mm}'
+    + P + '.mesa .rot{font-size:20pt;font-weight:700;letter-spacing:6pt;line-height:1}'
+    + P + '.mesa .num{font-size:92pt;font-weight:900;line-height:1;letter-spacing:-2pt}'
+    + P + '.qr{position:relative;background:#fff;padding:4mm;line-height:0}'
+    + P + '.qr .cantos{position:absolute;top:0;left:0;width:100%;height:100%;color:var(--mold)}'
+    + P + '.qr img{position:relative;display:block;width:4.3cm;height:4.3cm;image-rendering:pixelated}'
+    + P + '.passos{font-size:10.5pt;line-height:1.25;color:#000;text-align:left}'
+    + P + '.passos .tit{font-size:12pt;font-weight:700;letter-spacing:.3pt;color:var(--cab);margin-bottom:1mm}'
+    + P + '.passos b{font-weight:700}'
+    + P + '.passos .p{display:flex;align-items:center;margin-top:1mm}'
+    + P + '.passos .n{flex:none;width:5.8mm;height:5.8mm;border-radius:50%;background:var(--cab);color:#fff;font-weight:700;font-size:10.5pt;line-height:5.8mm;text-align:center;margin-right:2.2mm}'
+    + '@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important}'
+    +   'body>*:not(#cc-qr-print){display:none!important}'
+    +   '#cc-qr-print{position:static!important;overflow:visible!important;background:#fff!important;display:block!important}'
+    +   P + '.barra{display:none!important}' + P + '.folha{margin:0!important}}';
+
+    ["cc-qr-print", "cc-qr-print-style"].forEach(id => { const x = document.getElementById(id); if(x) x.remove(); });
+    const st = document.createElement("style");
+    st.id = "cc-qr-print-style";
+    st.textContent = css;
+    document.head.appendChild(st);
+
+    const ov = document.createElement("div");
+    ov.id = "cc-qr-print";
+    ov.innerHTML =
+      '<div class="barra"><b>Cartões de mesa</b>'
+    + '<label>Cor: <select id="cc-qr-cor"><option value="pb">Preto e branco</option><option value="cor">Colorido</option></select></label>'
+    + '<button id="cc-qr-imp" type="button">🖨️ Imprimir</button>'
+    + '<button id="cc-qr-fechar" type="button">✕ Fechar</button>'
+    + '<span>' + cartoes.length + ' mesa(s) · ' + nFolhas + ' folha(s) A4 · 4 por folha</span></div>'
+    + folhas;
+    document.body.appendChild(ov);
+
+    document.getElementById("cc-qr-cor").onchange = function() { ov.className = this.value === "cor" ? "colorido" : ""; };
+    document.getElementById("cc-qr-imp").onclick = function() { window.print(); };
+    document.getElementById("cc-qr-fechar").onclick = function() { ov.remove(); st.remove(); };
+
+    // Título sempre cabe no cartão: reduz a fonte só se o nome for longo demais.
+    ov.querySelectorAll(".titulo").forEach(el => {
+      let tam = 20; const h = el.parentNode.clientHeight;
+      el.style.fontSize = tam + "pt";
+      while((el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > h + 1) && tam > 14) { tam -= 0.5; el.style.fontSize = tam + "pt"; }
+    });
+  };
+
+  if(window.QRCode) { montar(); return; }
+  const sc = document.createElement("script");
+  sc.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+  sc.onload = montar;
+  sc.onerror = () => { toast("⚠️ QR indisponível offline"); };
+  document.head.appendChild(sc);
 }
 
 // ─── AUTO-REFRESH 10s (mantém cozinha/atendente/cliente) ──────
@@ -10017,7 +10150,9 @@ function _baseURL() {
   // Rota corrigida: sempre aponta para o próprio arquivo/domínio em que o
   // sistema está rodando (cookcontrol-padrao-v3.html ou giovanna_v12.html),
   // nunca mais fixo em outro deploy.
-  return window.location.origin + window.location.pathname;
+  // Sempre o endereço de PRODUÇÃO (mesmo do QR da mesa). Dentro de prévia/iframe
+  // (srcdoc), arquivo local ou localhost, origin vira "null" e o link saía "nullsrcdoc?...".
+  return "https://beach-farol-itapua.vercel.app/";
 }
 
 function getCardapioURLs() {
@@ -14696,7 +14831,7 @@ function _ccInjetarPainelPerfilEQr() {
       wrap.classList.toggle("hidden", !ativo);
       if (ativo) {
         document.getElementById("cc-smartlink-link").textContent =
-          window.location.origin + window.location.pathname + "#atendente";
+          ((/^https?:\/\//.test(window.location.origin) && !/localhost|127\.0\.0\.1/.test(window.location.origin)) ? window.location.origin + window.location.pathname : "https://beach-farol-itapua.vercel.app/") + "#atendente";
       }
     }
     const btnCartao = document.getElementById("cc-chamar-garcom-btn");
@@ -15541,6 +15676,7 @@ async function ccPedidosClientePoll() {
           if (!l) { pedidosCozinha.push(r); return; }
           if ((_rk[r.status] || 0) > (_rk[l.status] || 0)) l.status = r.status; // só avança; cópia atrasada não desfaz
           if (r.entregueEm && !l.entregueEm) l.entregueEm = r.entregueEm;
+          if (r.pago && !l.pago) { l.pago = true; l.pagoEm = r.pagoEm; }
         });
         try { localStorage.setItem("solbahia_pedidosCozinha_v1", JSON.stringify(pedidosCozinha)); } catch (e) {}
         if (typeof ccRenderPedidosCliente === "function") ccRenderPedidosCliente();
@@ -15709,7 +15845,7 @@ function ccPedirContaCliente() {
   if (!linhas.length) { toast("⚠️ Ainda não há pedidos nesta mesa."); return; }
   const n = Number(S.mesa);
   // Saldo da mesa = pedidos ainda não encerrados (mesma regra do botão "conta" do atendente).
-  const saldo = pedidosCozinha.filter(p => Number(p.mesa) === n && p.status !== "entregue").reduce((a, p) => a + (Number(p.total) || 0), 0);
+  const saldo = pedidosCozinha.filter(p => Number(p.mesa) === n && p.status !== "entregue" && !p.pago).reduce((a, p) => a + (Number(p.total) || 0), 0);
   if (!(saldo > 0)) { toast("⚠️ Esta mesa não tem saldo a pagar."); return; }
   const btn = document.getElementById("cc-fechamento-pagar-btn");
   const aguardando = document.getElementById("cc-fechamento-aguardando");
@@ -16073,7 +16209,9 @@ function _ccDesenharQrAtivacaoAtendente() {
   const box = document.getElementById("cc-qr-ativacao");
   if (!box || box.dataset.desenhado) return;
   const empresaId = window.COOKCONTROL_EMPRESA_ID_ATIVA || window.COOKCONTROL_CONFIG.empresaId;
-  const linkAtivacao = window.location.origin + window.location.pathname + "?ativar_empresa=" + encodeURIComponent(empresaId || "");
+  const _oAt = window.location.origin;
+  const _baseAt = (/^https?:\/\//.test(_oAt) && !/localhost|127\.0\.0\.1/.test(_oAt)) ? _oAt + window.location.pathname : "https://beach-farol-itapua.vercel.app/"; // prévia/iframe: origin "null" quebrava o QR do atendente
+  const linkAtivacao = _baseAt + "?ativar_empresa=" + encodeURIComponent(empresaId || "");
   const linkEl = document.getElementById("cc-link-ativacao");
   if (linkEl) linkEl.textContent = linkAtivacao;
   const desenharQr = () => { new QRCode(box, { text: linkAtivacao, width: 150, height: 150, correctLevel: QRCode.CorrectLevel.M }); box.dataset.desenhado = "1"; };
@@ -21763,6 +21901,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       if (!l) { if (r.status !== "entregue") out.set(r.id, r); return; }
       if ((RANK[r.status] || 0) > (RANK[l.status] || 0)) l.status = r.status;
       if (r.entregueEm && !l.entregueEm) l.entregueEm = r.entregueEm;
+      if (r.pago && !l.pago) { l.pago = true; l.pagoEm = r.pagoEm; }
     });
     return Array.from(out.values()).sort(function (a, b) { return ts(b) - ts(a); });
   }
