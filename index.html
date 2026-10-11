@@ -1,5 +1,17 @@
 <!DOCTYPE html>
 <html lang="pt-BR"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<script id="cc-repassa-url-do-qr">
+/* O QR abre https://SITE/?role=cliente&mesa=N na página de FORA. Se o app roda dentro de um <iframe src="/app/index.html">
+   (casca React/Lovable), o iframe nasce SEM esses parâmetros e abre como Proprietário. Aqui o iframe copia a query e o #hash
+   da página de fora (mesma origem) para a própria URL, ANTES de qualquer outro script ler location.search. Sem reload. */
+(function () {
+  try {
+    if (window.parent === window) return;
+    var pai = window.parent.location;
+    if (!location.search && pai.search) history.replaceState(null, '', location.pathname + pai.search + (location.hash || pai.hash || ''));
+  } catch (e) { /* pai de outra origem (prévia): ignora */ }
+})();
+</script>
 <script id="cc-parede-prelock">
 /* PAREDE DE ACESSO (camada 0) — roda ANTES de qualquer outro script.
    1) Traduz os atalhos de URL (?cliente=true, ?atendente=true, ?motoboy=true, ?delivery=true) para o
@@ -7472,12 +7484,30 @@ function popularSelectCliente() {
   if(atual) sel.value = atual;
 }
 
+// ─── ORIGEM DO SITE (window.location.origin) ──────────────────
+// Devolve o domínio em que o sistema está rodando. Em prévia/iframe/arquivo local o origin é "null":
+// nesse caso devolve "" (link relativo, sem inventar domínio) e marca window._ccOrigemInvalida = true,
+// para o QR continuar aparecendo na tela mas a IMPRESSÃO/DOWNLOAD ficarem bloqueadas.
+window.ccOrigemSite = function () {
+  const o = window.location.origin;
+  const ok = !!o && /^https?:\/\//.test(o);
+  window._ccOrigemInvalida = !ok;
+  /* Em prévia/arquivo local o origin é "null": o QR NUNCA pode levar link sem domínio (o celular lê só "/?role=...").
+     Nesse caso usa o domínio oficial de produção. No site publicado (Vercel/domínio próprio) vale sempre o window.location.origin. */
+  return ok ? o : "https://beach-farol-itapua.vercel.app";
+};
+function ccBloqueiaSeSemSite() {
+  window.ccOrigemSite();
+  return false; // link sempre absoluto: imprimir/baixar liberados em qualquer contexto
+}
+
 // ─── GERAR LINK DO CLIENTE ────────────────────────────────────
 function gerarLinkCliente(mesa) {
-  // Link oficial do QR da mesa: endereço de produção FIXO + ?mesa=N. Nada além disso (sem role, sem hash, sem texto extra).
+  // Link do QR da mesa: SEMPRE o domínio em que o sistema está rodando (window.location.origin) + ?role=cliente&mesa=N.
+  // Sem IP, sem domínio fixo: na Vercel (ou em qualquer domínio próprio) o QR aponta para o próprio site.
   const num = String(mesa).replace(/[^0-9]/g, "");
   if (!num) throw new Error("Número de mesa inválido. Impressão bloqueada.");
-  return "https://beach-farol-itapua.vercel.app/?mesa=" + num;
+  return window.ccOrigemSite() + "/?role=cliente&mesa=" + num;
 }
 
 // ─── GERAR QR DA MESA ─────────────────────────────────────────
@@ -7698,6 +7728,7 @@ function imprimirQRMesa(alvo) {
   else { const m = parseInt((document.getElementById("cli-mesa-sel")||{}).value); mesas = m ? [m] : []; }
   mesas = mesas.filter((n, i) => mesas.indexOf(n) === i);
   if(!mesas.length) { toast("Selecione a mesa primeiro!"); return; }
+  if(ccBloqueiaSeSemSite()) return;
 
   // TRAVA: todos os links são gerados e validados ANTES de abrir qualquer janela de impressão.
   let links;
@@ -9380,7 +9411,8 @@ function salvarDelivery() { salvar("pedidosDelivery_v1", pedidosDelivery); }
 const DELIVERY_STATUS = {
   recebido:  { label: "Recebido",          emoji: "📥", cor: "#6b7280", bg: "#f9fafb" },
   preparo:   { label: "Em Preparo",        emoji: "🍳", cor: "#ea580c", bg: "#fff7ed" },
-  saiu:      { label: "Saiu p/ Entrega",   emoji: "🛵", cor: "#0284c7", bg: "#e0f2fe" },
+  pronto:    { label: "Pronto p/ Retirada", emoji: "📦", cor: "#7c3aed", bg: "#f5f3ff" },
+  saiu:      { label: "NA RUA",            emoji: "🛵", cor: "#0284c7", bg: "#e0f2fe" },
   entregue:  { label: "Entregue",          emoji: "✅", cor: "#16a34a", bg: "#f0fdf4" },
   cancelado: { label: "Cancelado",         emoji: "❌", cor: "#dc2626", bg: "#fef2f2" },
 };
@@ -9442,6 +9474,7 @@ function _montarViewDelivery() {
     <button class="pill on"  id="dl-fil-todos"    onclick="filtrarDelivery('todos',this)">📋 Todos</button>
     <button class="pill off" id="dl-fil-recebido" onclick="filtrarDelivery('recebido',this)">📥 Recebidos</button>
     <button class="pill off" id="dl-fil-preparo"  onclick="filtrarDelivery('preparo',this)">🍳 Em Preparo</button>
+    <button class="pill off" id="dl-fil-pronto"   onclick="filtrarDelivery('pronto',this)">📦 Prontos</button>
     <button class="pill off" id="dl-fil-saiu"     onclick="filtrarDelivery('saiu',this)">🛵 Na Rua</button>
     <button class="pill off" id="dl-fil-entregue" onclick="filtrarDelivery('entregue',this)">✅ Entregues</button>
     <button class="pill off" id="dl-fil-cancelado" onclick="filtrarDelivery('cancelado',this)">❌ Cancelados</button>
@@ -9842,7 +9875,7 @@ function renderDelivery() {
 
   const hoje = new Date().toDateString();
   const hojeP   = pedidosDelivery.filter(p => new Date(p.data).toDateString() === hoje);
-  const emPrepP = pedidosDelivery.filter(p => ["recebido","preparo"].includes(p.status));
+  const emPrepP = pedidosDelivery.filter(p => ["recebido","preparo","pronto"].includes(p.status));
   const naRuaP  = pedidosDelivery.filter(p => p.status === "saiu");
   const totHoje = hojeP.reduce((s,p) => s+p.total, 0);
 
@@ -9855,6 +9888,8 @@ function renderDelivery() {
   const filtrados = _dlFiltro === "todos"
     ? pedidosDelivery
     : pedidosDelivery.filter(p => p.status === _dlFiltro);
+  // Despacho: prontos saem do MENOR para o MAIOR km (Haversine a partir da barraca)
+  if(_dlFiltro === "pronto" && typeof ccDlOrdenarPorKm === "function") filtrados.sort(ccDlOrdenarPorKm);
 
   if(!filtrados.length) {
     lista.innerHTML = "";
@@ -9890,6 +9925,7 @@ function renderDelivery() {
         </div>
       </div>
 
+      ${typeof ccDlBlocoDespacho === "function" ? ccDlBlocoDespacho(ped) : ""}
       <!-- Itens -->
       <div style="border-top:1px solid #f3f4f6;padding-top:8px;margin-bottom:10px">
         ${ped.itens.map(i => `<span style="font-size:.76rem;color:#374151;margin-right:8px">${i.q}× ${i.nome}</span>`).join("")}
@@ -9943,13 +9979,15 @@ function renderDelivery() {
       </div>
     </div>`;
   }).join("");
+  try { if(typeof ccDlDesenharQRs === "function") ccDlDesenharQRs(); } catch(e) { console.warn("[delivery] QR:", e); }
 }
 
 // Progressão de status
 function _proximoStatus(atual) {
   const seq = [
     { status:"recebido", ...DELIVERY_STATUS.recebido,  nextLabel:"Iniciar Preparo" },
-    { status:"preparo",  ...DELIVERY_STATUS.preparo,   nextLabel:"Saiu p/ Entrega" },
+    { status:"preparo",  ...DELIVERY_STATUS.preparo,   nextLabel:"Marcar Pronto" },
+    { status:"pronto",   ...DELIVERY_STATUS.pronto,    nextLabel:"Saiu p/ Entrega" },
     { status:"saiu",     ...DELIVERY_STATUS.saiu,      nextLabel:"Marcar Entregue" },
   ];
   const idx = seq.findIndex(s => s.status === atual);
@@ -9958,7 +9996,7 @@ function _proximoStatus(atual) {
   return { status: prox.status, emoji: prox.emoji, label: prox.nextLabel || prox.label, cor: prox.cor };
 }
 function _anteriorStatus(atual) {
-  const seq = ["recebido","preparo","saiu","entregue"];
+  const seq = ["recebido","preparo","pronto","saiu","entregue"];
   const idx = seq.indexOf(atual);
   return idx > 0 ? seq[idx - 1] : null;
 }
@@ -9968,13 +10006,14 @@ function avancarDelivery(id, novoStatus) {
   if(!ped) return;
   ped.status = novoStatus;
   ped.ultima_atualizacao = new Date().toISOString();
+  if(novoStatus === "saiu" && !ped.saida_em) ped.saida_em = ped.ultima_atualizacao;
   if(novoStatus === "entregue" && !ped.entregueEm) ped.entregueEm = ped.ultima_atualizacao;
   salvarDelivery();
   // Sync no KDS se existir
   if(typeof pedidosCozinha !== "undefined") {
     const kds = pedidosCozinha.find(p => p.id === id);
     if(kds) {
-      const mapa = { recebido:"pendente", preparo:"preparo", saiu:"pronto", entregue:"entregue" };
+      const mapa = { recebido:"pendente", preparo:"preparo", pronto:"pronto", saiu:"pronto", entregue:"entregue" };
       kds.status = mapa[novoStatus] || "pendente";
       if(novoStatus === "entregue" && !kds.entregueEm) kds.entregueEm = ped.entregueEm;
       if(typeof salvar === "function") salvar("pedidosCozinha_v1", pedidosCozinha);
@@ -10098,7 +10137,7 @@ renderDashboard = function() {
   _renderDashboardDL();
   const hoje = new Date().toDateString();
   const dlHoje   = pedidosDelivery.filter(p => new Date(p.data).toDateString() === hoje);
-  const dlAtivos = pedidosDelivery.filter(p => ["recebido","preparo"].includes(p.status));
+  const dlAtivos = pedidosDelivery.filter(p => ["recebido","preparo","pronto"].includes(p.status));
   const dlNaRua  = pedidosDelivery.filter(p => p.status === "saiu");
   const dlTotal  = dlHoje.reduce((s,p) => s+p.total, 0);
   const vendasTot= (typeof historico !== "undefined") ? historico.filter(h => new Date(h.data).toDateString() === hoje && h.tipo_venda !== "delivery").reduce((s,h) => s+h.total, 0) : 0;
@@ -11305,7 +11344,7 @@ function renderDashboardCompleto() {
 
   // Atualizar delivery card
   if(el("db-dl-total"))  el("db-dl-total").textContent  = fmtBRL(fatDelivery);
-  if(el("db-dl-ativos")) el("db-dl-ativos").textContent = (typeof pedidosDelivery!=="undefined") ? pedidosDelivery.filter(p=>["recebido","preparo"].includes(p.status)).length : 0;
+  if(el("db-dl-ativos")) el("db-dl-ativos").textContent = (typeof pedidosDelivery!=="undefined") ? pedidosDelivery.filter(p=>["recebido","preparo","pronto"].includes(p.status)).length : 0;
   if(el("db-dl-rua"))    el("db-dl-rua").textContent    = (typeof pedidosDelivery!=="undefined") ? pedidosDelivery.filter(p=>p.status==="saiu").length : 0;
 
   // Painel forma de pagamento detalhado
@@ -12531,7 +12570,7 @@ function _atualizarDashGestor() {
         .filter(p => !["entregue","cancelado"].includes(p.status))
         .map(p => ({
           id: p.id, data: p.data, mesa: "🛵 "+p.cliente,
-          status: { recebido:"pendente", preparo:"preparo", saiu:"pronto" }[p.status] || p.status,
+          status: { recebido:"pendente", preparo:"preparo", pronto:"pronto", saiu:"pronto" }[p.status] || p.status,
           dl_status: p.status,
           itens: p.itens, obs: p.obs||"", canal: "delivery", pag: p.pag, total: p.total,
           endereco: p.endereco
@@ -12654,11 +12693,9 @@ window._gestorAvancar = function(id, canal) {
   if(canal === "delivery" && typeof pedidosDelivery !== "undefined") {
     const dp = pedidosDelivery.find(p=>p.id===id);
     if(dp) {
-      const seq = ["recebido","preparo","saiu","entregue"];
-      const mapa = { pendente:"recebido", preparo:"preparo", pronto:"saiu", entregue:"entregue" };
+      const mapa = { pendente:"recebido", preparo:"preparo", pronto:"pronto", entregue:"entregue" };
       const kdsStatus = ped ? ped.status : "preparo";
-      const novoStatus = seq[seq.indexOf(mapa[kdsStatus]||"recebido")+1] || "entregue";
-      dp.status = novoStatus;
+      if(dp.status !== "saiu" && dp.status !== "entregue") dp.status = mapa[kdsStatus] || dp.status;
       salvar("pedidosDelivery_v1", pedidosDelivery);
     }
   }
@@ -22357,7 +22394,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   var S = { nome: '', watch: null, pos: null, mapa: null, mkM: null, mkD: null, linha: null, sel: null,
             ultPub: 0, ultRota: 0, ultRotaPos: null, rota: null, nuvem: '', wake: null, timer: null, geo: {}, leaflet: null };
   var LS_NOME = 'cc_motoboy_nome', LS_POS = 'cc_motoboy_ultima_pos';
-  var ATIVOS = ['recebido', 'preparo', 'saiu'];
+  var ATIVOS = ['recebido', 'preparo', 'pronto', 'saiu'];
   function $(id) { return document.getElementById(id); }
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
@@ -22386,12 +22423,20 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     r.innerHTML =
       '<div style="background:linear-gradient(135deg,#0f2340,#0369a1);color:#fff;padding:16px 16px 14px">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
-          '<div style="font-weight:900;font-size:1.1rem">🛵 Rota do Entregador</div>' +
+          '<div style="font-weight:900;font-size:1.1rem">🛵 Minhas Entregas</div>' +
           '<div id="mb-gps" style="font-size:.72rem;font-weight:700;background:rgba(255,255,255,.15);padding:4px 10px;border-radius:999px">📡 GPS desligado</div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-top:12px">' +
           '<input id="mb-nome" placeholder="Seu nome (igual ao cadastrado no pedido)" style="flex:1;min-width:0;padding:10px 12px;border:0;border-radius:10px;font-size:.9rem">' +
           '<button id="mb-nome-ok" type="button" style="padding:10px 14px;border:0;border-radius:10px;background:#22c55e;color:#fff;font-weight:800">Entrar</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="padding:12px 12px 0">' +
+        '<button id="mb-scan" type="button" style="width:100%;padding:22px 12px;border:0;border-radius:18px;background:#16a34a;color:#fff;font-weight:900;font-size:1.25rem;box-shadow:0 6px 18px rgba(22,163,74,.35)">📷 Escanear Sacola / Iniciar Entrega</button>' +
+        '<div id="mb-scan-box" style="display:none;margin-top:10px;background:#fff;border-radius:16px;padding:10px;border:1px solid #e5e7eb">' +
+          '<div id="mb-reader" style="width:100%;border-radius:12px;overflow:hidden"></div>' +
+          '<div style="display:flex;gap:8px;margin-top:8px"><input id="mb-cod" placeholder="ou digite o código do pedido" style="flex:1;min-width:0;padding:10px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.85rem"><button id="mb-cod-ok" type="button" style="padding:10px 14px;border:0;border-radius:10px;background:#0369a1;color:#fff;font-weight:800">OK</button></div>' +
+          '<button id="mb-scan-x" type="button" style="width:100%;margin-top:8px;padding:10px;border:0;border-radius:10px;background:#f3f4f6;color:#374151;font-weight:800">✖ Fechar câmera</button>' +
         '</div>' +
       '</div>' +
       '<div id="mb-lista" style="padding:12px"></div>' +
@@ -22400,6 +22445,9 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     $('mb-nome').value = S.nome;
     $('mb-nome-ok').onclick = function () { S.nome = $('mb-nome').value.trim(); try { localStorage.setItem(LS_NOME, S.nome); } catch (e) {} S.sel = null; render(); if (S.nome) iniciarGPS(); };
     $('mb-nome').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('mb-nome-ok').click(); });
+    $('mb-scan').onclick = abrirScan;
+    $('mb-scan-x').onclick = function () { pararScan(function () { fecharScanBox(); }); };
+    $('mb-cod-ok').onclick = function () { var v = $('mb-cod').value; $('mb-cod').value = ''; pararScan(function () { fecharScanBox(); processarCodigo(v); }); };
   }
 
   function limparMapa() { try { if (S.mapa) S.mapa.remove(); } catch (e) {} S.mapa = S.mkM = S.mkD = S.linha = null; S.ultRotaPos = null; }
@@ -22414,7 +22462,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       var on = p.id === S.sel, taxa = Number(p.taxa_entrega) || 0, total = (Number(p.total) || 0) + taxa;
       var st = (typeof DELIVERY_STATUS !== 'undefined' && DELIVERY_STATUS[p.status]) || { emoji: '', label: p.status, cor: '#6b7280' };
       return '<div data-id="' + esc(p.id) + '" class="mb-card" style="background:#fff;border:2px solid ' + (on ? '#0369a1' : '#e5e7eb') + ';border-radius:16px;padding:12px;margin-bottom:10px;cursor:pointer">' +
-        '<div style="display:flex;justify-content:space-between;gap:8px"><b style="color:#0f2340">' + esc(p.cliente || 'Cliente') + '</b>' +
+        '<div style="display:flex;justify-content:space-between;gap:8px"><b style="color:#0f2340">' + esc(p.cliente || 'Cliente') + ' <small style="color:#9ca3af;font-weight:600">#' + esc(String(p.id).slice(0, 15)) + '</small></b>' +
         '<span style="font-size:.68rem;font-weight:800;color:' + st.cor + '">' + st.emoji + ' ' + esc(st.label) + '</span></div>' +
         '<div style="font-size:.8rem;color:#374151;margin-top:4px">📍 ' + esc(p.endereco) + (p.complemento ? ' · ' + esc(p.complemento) : '') + '</div>' +
         (p.telefone ? '<div style="font-size:.75rem;color:#6b7280">📞 ' + esc(p.telefone) + '</div>' : '') +
@@ -22439,9 +22487,9 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     }
     var bt = function (txt, cor, fn, id) { return '<button type="button" id="' + id + '" style="flex:1;min-width:120px;padding:12px;border:0;border-radius:12px;background:' + cor + ';color:#fff;font-weight:800;font-size:.82rem">' + txt + '</button>'; };
     var a = $('mb-acoes');
-    a.innerHTML = bt('🗺️ Google Maps', '#0891b2', null, 'mb-gm') + bt('🚗 Waze', '#33ccff', null, 'mb-wz') +
+    a.innerHTML = bt('🗺️ Iniciar Rota no GPS', '#0891b2', null, 'mb-gm') + bt('🚗 Waze', '#33ccff', null, 'mb-wz') +
       (p.status !== 'saiu' ? bt('🛵 Saí para entrega', '#0284c7', null, 'mb-saiu') : '') +
-      bt('✅ Confirmar Entrega Realizada', '#16a34a', null, 'mb-ok');
+      bt('✅ Confirmar Entrega', '#16a34a', null, 'mb-ok');
     $('mb-wz').style.color = '#0f2340';
     $('mb-gm').onclick = function () { abrirExterno(p, 'gm'); };
     $('mb-wz').onclick = function () { abrirExterno(p, 'wz'); };
@@ -22452,9 +22500,13 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
 
   function abrirExterno(p, qual) {
     var d = destinoSinc(p);
-    if (!d) { if (qual === 'gm') window.open('https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(p.endereco), '_blank'); else toastz('Sem coordenadas do destino para o Waze.'); return; }
-    if (qual === 'gm') window.open('https://www.google.com/maps/dir/?api=1&destination=' + d.lat + ',' + d.lng, '_blank');
-    else window.open('https://waze.com/ul?ll=' + d.lat + ',' + d.lng + '&navigate=yes', '_blank');
+    if (qual === 'gm') {   /* URL universal do Google Maps: abre direto no app de GPS do celular, com o endereço do cliente codificado */
+      var end = String(p.endereco || '').trim();
+      window.open('https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(end), '_blank');
+      return;
+    }
+    if (!d) { toastz('Sem coordenadas do destino para o Waze.'); return; }
+    window.open('https://waze.com/ul?ll=' + d.lat + ',' + d.lng + '&navigate=yes', '_blank');
   }
 
   /* ── Destino (GPS capturado no pedido → cache → geocodificação do endereço digitado) ── */
@@ -22580,6 +22632,8 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (!confirm('Confirmar que o pedido de ' + (p.cliente || 'cliente') + ' foi ENTREGUE?')) return;
     p.entrega_confirmada_por = S.nome;
     p.entrega_confirmada_em = new Date().toISOString();
+    if (!String(p.motoboy || '').trim()) p.motoboy = S.nome;   /* garante o vínculo: o fechamento agrupa por p.motoboy */
+    if (p.pag === 'dinheiro') p.dinheiro_em_maos = Math.round(((Number(p.total) || 0) + (Number(p.taxa_entrega) || 0)) * 100) / 100;
     if (S.pos) p.entrega_geo = { lat: S.pos.lat, lng: S.pos.lng, prec: S.pos.prec };
     if (typeof salvarDelivery === 'function') salvarDelivery();
     if (typeof avancarDelivery === 'function') avancarDelivery(id, 'entregue');
@@ -22587,6 +22641,61 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     render(); pararGPSSePreciso();
     toastz('✅ Entrega confirmada!');
   }
+
+  /* ── Leitor de QR (html5-qrcode, carregado só quando o motoboy toca no botão) ── */
+  var LIB = ['https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js', 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'];
+  function carregarLeitor(cb, i) {
+    if (window.Html5Qrcode) { cb(true); return; }
+    i = i || 0; if (i >= LIB.length) { cb(false); return; }
+    var sc = document.createElement('script'); sc.src = LIB[i];
+    sc.onload = function () { cb(!!window.Html5Qrcode); };
+    sc.onerror = function () { carregarLeitor(cb, i + 1); };
+    document.head.appendChild(sc);
+  }
+  function fecharScanBox() { var b = $('mb-scan-box'); if (b) b.style.display = 'none'; }
+  function pararScan(cb) {
+    var q = S.qr; S.qr = null;
+    if (!q) { if (cb) cb(); return; }
+    var fim = function () { try { q.clear(); } catch (e) {} if (cb) cb(); };
+    try { q.stop().then(fim, fim); } catch (e) { fim(); }
+  }
+  function abrirScan() {
+    if (!S.nome) { toastz('Digite seu nome e toque em Entrar antes de escanear.'); var n = $('mb-nome'); if (n) n.focus(); return; }
+    $('mb-scan-box').style.display = 'block';
+    carregarLeitor(function (ok) {
+      if (!ok) { toastz('Leitor de câmera indisponível (sem internet?). Digite o código do pedido abaixo.'); return; }
+      pararScan(function () {
+        try { S.qr = new Html5Qrcode('mb-reader'); } catch (e) { toastz('Não consegui iniciar o leitor.'); return; }
+        S.scanBusy = false;
+        S.qr.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 240, height: 240 } }, function (txt) {
+          if (S.scanBusy) return; S.scanBusy = true;
+          pararScan(function () { fecharScanBox(); processarCodigo(txt); });
+        }, function () {}).catch(function (e) {
+          toastz('⚠️ Câmera: ' + (e && e.message ? e.message : 'permissão negada') + ' — digite o código do pedido.');
+        });
+      });
+    });
+  }
+  /* Lido o ID: dá OK sozinho → NA RUA + vincula ao motoboy + abre a lista de entregas dele */
+  function processarCodigo(txt) {
+    var id = String(txt || '').trim(); if (!id) return;
+    var lista = ped(), p = lista.filter(function (x) { return x.id === id; })[0];
+    if (!p) { toastz('❌ Pedido não encontrado neste aparelho. Atualize a página e escaneie de novo.'); return; }
+    if (p.status === 'cancelado') { toastz('❌ Este pedido foi cancelado.'); return; }
+    if (p.status === 'entregue') { toastz('✅ Este pedido já foi entregue.'); return; }
+    if (p.status === 'saiu' && p.motoboy && norm(p.motoboy) !== norm(S.nome)) { toastz('⚠️ Este pedido já saiu com ' + p.motoboy + '.'); return; }
+    if (p.status === 'recebido' || p.status === 'preparo') { toastz('⏳ Pedido ainda em preparo — só sai quando estiver PRONTO.'); return; }
+    p.motoboy = S.nome;
+    try {
+      if (p.status !== 'saiu' && typeof avancarDelivery === 'function') avancarDelivery(p.id, 'saiu');
+      else if (typeof salvarDelivery === 'function') salvarDelivery();
+    } catch (e) { console.warn('[motoboy] avancar:', e); }
+    S.sel = p.id; S.ultRotaPos = null; render(); iniciarGPS();
+    try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
+    toastz('🛵 NA RUA — entrega de ' + (p.cliente || 'cliente') + ' iniciada!');
+    var det = $('mb-lista'); if (det && det.scrollIntoView) det.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  window.ccMotoboyProcessarCodigo = processarCodigo;
 
   window.ccMotoboyIniciar = function () {
     try { S.nome = localStorage.getItem(LS_NOME) || ''; } catch (e) {}
@@ -22692,6 +22801,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       var k = String(p.motoboy || '').trim() || '— sem motoboy —';
       var r = g[k] = g[k] || { nome: k, n: 0, sub: 0, taxa: 0, cEnt: 0, cBri: 0 };
       r.n++; r.sub += v.sub; r.taxa += v.taxa; r.cEnt += v.ent; r.cBri += v.bri;
+      if (p.pag === 'dinheiro') { r.din = (r.din || 0) + v.sub + v.taxa; tot.din = (tot.din || 0) + v.sub + v.taxa; }
       tot.n++; tot.sub += v.sub; tot.taxa += v.taxa; tot.cEnt += v.ent; tot.cBri += v.bri;
     });
     return { iso: iso, linhas: Object.keys(g).sort().map(function (k) { return g[k]; }), tot: tot, andamento: andamento, fatDia: fatDia, pedidosDia: doDia.length };
@@ -22727,6 +22837,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       '</div>' +
       '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="' + th + ';text-align:left">Motoboy</th><th style="' + th + '">Entregas</th><th style="' + th + '">Itens</th><th style="' + th + '">Taxas</th><th style="' + th + '">Comissão entreg.</th><th style="' + th + '">Comissão brigada</th></tr></thead><tbody>' + linhas + '</tbody>' +
       (d.linhas.length ? '<tfoot><tr style="border-top:2px solid #0f2340"><td style="padding:6px 8px;font-weight:900;font-size:.78rem">TOTAL</td><td style="' + td + ';font-weight:900">' + d.tot.n + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.sub) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.taxa) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.cEnt) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.cBri) + '</td></tr></tfoot>' : '') + '</table></div>' +
+      (d.tot.din ? '<p style="font-size:.74rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin-top:8px">💵 Dinheiro recebido na porta (a acertar com o caixa): <b>' + brl(d.tot.din) + '</b> — ' + d.linhas.filter(function (r) { return r.din; }).map(function (r) { return esc(r.nome) + ' ' + brl(r.din); }).join(' · ') + '</p>' : '') +
       (d.andamento.n ? '<p style="font-size:.72rem;color:#b45309;margin-top:8px">⏳ ' + d.andamento.n + ' pedido(s) ainda em andamento (' + brl(d.andamento.sub) + ' em itens) — entram no fechamento quando forem marcados como entregues.</p>' : '') +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn-primary px-4 py-2 text-xs" type="button" onclick="ccDlCopiarFechamento()">📋 Copiar fechamento</button></div>' +
       '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:.75rem;font-weight:800;color:#0f2340">⚙️ Regras de valores e comissões</summary>' +
@@ -22955,6 +23066,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   window.ccBaixarEtiquetaMesa = function (mesa) {
     mesa = parseInt(mesa || (document.getElementById('cli-mesa-sel') || {}).value, 10);
     if (!mesa) { tz('Selecione a mesa primeiro!'); return Promise.resolve(); }
+    if (ccBloqueiaSeSemSite()) return Promise.resolve();
     return window.ccLogoImg().then(function (l) { if (!l) tz('⚠️ Logomarca não encontrada (cadastre em Admin → Identidade Visual). Etiqueta gerada SEM logo.'); })
       .then(function () { return window.ccEtiquetaCanvas(mesa); }).then(canvasParaBlob).then(function (b) {
       return window.ccSalvarArquivo(b, 'etiqueta-mesa-' + pad2(mesa) + '.png');
@@ -23081,5 +23193,109 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   });
 })();
 
+</script>
+<script id="cc-mod-05">
+/* ═══════════════════════════════════════════════════════════════════════
+   DELIVERY — DESPACHO NO ADMIN: QR por pedido (EM PREPARO / PRONTOS) + distância Haversine + fila de saída
+   • QR = SOMENTE o ID do pedido (o motoboy lê na aba "Minhas Entregas").
+   • Distância em linha reta (km) da barraca (Itapuã) até o endereço do pedido. Coordenada do pedido = GPS capturado
+     no pedido, ou geocodificação do endereço digitado (OpenStreetMap/Nominatim, 1 consulta por segundo, guardada em cache).
+   • Prontos ordenados do MENOR para o MAIOR km = sequência de saída do motoboy.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var BARRACA = { lat: -12.9463, lng: -38.3581 };          // Beach Farol — Itapuã (fixo, definido pelo dono)
+  window.CC_BARRACA_COORD = BARRACA;
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  /* Fórmula de Haversine → km */
+  function haversineKm(a, b) {
+    var R = 6371, r = Math.PI / 180;
+    var dLa = (b.lat - a.lat) * r, dLo = (b.lng - a.lng) * r;
+    var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  window.ccHaversineKm = haversineKm;
+
+  function destino(p) {
+    var la = Number(p.latitude), lo = Number(p.longitude);
+    if (isFinite(la) && isFinite(lo) && (la || lo)) return { lat: la, lng: lo };
+    try { var c = JSON.parse(localStorage.getItem('cc_geo_dest_' + p.id) || 'null'); if (c && isFinite(c.lat) && isFinite(c.lng)) return c; } catch (e) {}
+    return null;
+  }
+  window.ccDlKm = function (p) { var d = destino(p); return d ? haversineKm(BARRACA, d) : null; };
+  function kmTxt(k) { return k.toFixed(1).replace('.', ',') + ' km'; }
+
+  /* Geocodificação do endereço digitado — fila de 1 consulta/s (regra do Nominatim), sem gravar nada dentro do pedido */
+  var fila = [], pendente = {}, rodando = false;
+  function geocodificar(p) {
+    if (!p || !p.endereco || pendente[p.id]) return;
+    pendente[p.id] = 1; fila.push({ id: p.id, end: p.endereco });
+    if (!rodando) proximo();
+  }
+  function proximo() {
+    var it = fila.shift(); if (!it) { rodando = false; return; }
+    rodando = true;
+    var ctl = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ctl) ctl.abort(); }, 9000);
+    fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=' + encodeURIComponent(it.end), { signal: ctl ? ctl.signal : undefined, headers: { 'Accept-Language': 'pt-BR' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        clearTimeout(t);
+        if (j && j[0]) {
+          try { localStorage.setItem('cc_geo_dest_' + it.id, JSON.stringify({ lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon), fonte: 'endereco' })); } catch (e) {}
+          try { if (typeof renderDelivery === 'function' && document.getElementById('dl-lista')) renderDelivery(); } catch (e) {}
+        }
+      }).catch(function () { clearTimeout(t); })
+      .then(function () { setTimeout(proximo, 1100); });
+  }
+
+  /* Ordem de saída: do menor para o maior km; sem coordenada vai para o fim (mais antigo primeiro) */
+  window.ccDlOrdenarPorKm = function (a, b) {
+    var ka = window.ccDlKm(a), kb = window.ccDlKm(b);
+    if (ka == null && kb == null) return new Date(a.data) - new Date(b.data);
+    if (ka == null) return 1; if (kb == null) return -1;
+    return ka - kb;
+  };
+  function posicaoNaFila(p) {
+    var prontos = (typeof pedidosDelivery !== 'undefined' ? pedidosDelivery : []).filter(function (x) { return x.status === 'pronto'; }).sort(window.ccDlOrdenarPorKm);
+    for (var i = 0; i < prontos.length; i++) if (prontos[i].id === p.id) return i + 1;
+    return null;
+  }
+
+  /* Bloco exibido em cada card (só EM PREPARO e PRONTOS) */
+  window.ccDlBlocoDespacho = function (p) {
+    if (p.status !== 'preparo' && p.status !== 'pronto') return '';
+    var km = window.ccDlKm(p); if (km == null) geocodificar(p);
+    var pos = p.status === 'pronto' ? posicaoNaFila(p) : null;
+    var id = esc(p.id);
+    return '<div style="display:flex;gap:12px;align-items:center;border:1.5px dashed #c4b5fd;background:#faf5ff;border-radius:12px;padding:10px;margin-bottom:10px">' +
+      '<canvas class="cc-dl-qr" data-id="' + id + '" width="132" height="132" style="width:96px;height:96px;background:#fff;border-radius:8px;flex:none"></canvas>' +
+      '<div style="min-width:0;font-size:.74rem;color:#4c1d95;line-height:1.45">' +
+        (pos ? '<div style="font-weight:900;font-size:.95rem;color:#7c3aed">🏁 Saída nº ' + pos + '</div>' : '<div style="font-weight:800">QR do pedido (para o motoboy ler)</div>') +
+        '<div>📏 ' + (km == null ? 'calculando distância…' : '<b>' + kmTxt(km) + '</b> da barraca (linha reta)') + '</div>' +
+        '<div style="font-size:.66rem;color:#7c3aed;word-break:break-all">' + id + '</div>' +
+        '<button type="button" onclick="ccDlImprimirQR(\'' + id + '\')" style="margin-top:4px;border:0;border-radius:8px;background:#7c3aed;color:#fff;padding:5px 10px;font-size:.7rem;font-weight:800">🖨️ Imprimir QR</button>' +
+      '</div></div>';
+  };
+  window.ccDlDesenharQRs = function () {
+    document.querySelectorAll('canvas.cc-dl-qr').forEach(function (c) {
+      try {
+        var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+        window.ccQrDesenhar(x, 0, 0, c.width, c.getAttribute('data-id'), { nivel: 'M', qz: 2 });
+      } catch (e) { console.warn('[delivery] QR do pedido:', e && e.message); }
+    });
+  };
+  /* Etiqueta para colar na sacola / comanda impressa */
+  window.ccDlImprimirQR = function (id) {
+    var p = (typeof pedidosDelivery !== 'undefined' ? pedidosDelivery : []).filter(function (x) { return x.id === id; })[0]; if (!p) return;
+    var img = (typeof window.ccQrPNGDataURL === 'function') ? window.ccQrPNGDataURL(p.id, 720, null, 4) : document.querySelector('canvas.cc-dl-qr[data-id="' + id + '"]').toDataURL('image/png');
+    var w = window.open('', '_blank'); if (!w) { if (typeof toast === 'function') toast('Libere pop-ups para imprimir o QR.'); return; }
+    w.document.write('<!doctype html><meta charset="utf-8"><title>QR ' + esc(p.id) + '</title><body style="font-family:system-ui;text-align:center;margin:12px">' +
+      '<h2 style="margin:0">🛵 ' + esc(p.cliente || 'Cliente') + '</h2><p style="margin:4px 0;font-size:14px">' + esc(p.endereco || '') + '</p>' +
+      '<img src="' + img + '" style="width:260px;height:260px"><p style="font:12px monospace;word-break:break-all">' + esc(p.id) + '</p>' +
+      '<script>window.onload=function(){setTimeout(function(){window.print()},250)}<\/script>');
+    w.document.close();
+  };
+})();
 </script>
 </body></html>
