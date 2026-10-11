@@ -52,10 +52,12 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   /* Desenha o QR em (x,y) com lado `size`, módulos alinhados ao pixel (sem frestas). qz = módulos de margem interna. */
   window.ccQrDesenhar = function (ctx, x, y, size, texto, o) {
     o = o || {};
+    if (typeof window.ccQrGen !== 'function') throw new Error('Motor QR (ccQrGen) não carregou');
     var nivel = o.logo ? 'H' : (o.nivel || 'M');
     var qr = window.ccQrGen(0, nivel);
     qr.addData(String(texto), 'Byte');
     qr.make();
+    if (!(qr.getModuleCount() > 20)) throw new Error('Matriz QR vazia');
     var n = qr.getModuleCount(), qz = o.qz == null ? 0 : o.qz, tot = n + qz * 2, cel = size / tot;
     if (o.fundo !== false) { ctx.fillStyle = o.claro || '#ffffff'; ctx.fillRect(x, y, size, size); }
     /* Zona do logo: lado = sqrt(5%) do QR (área do logo <= 5%) + máscara branca quadrada de 4 px (escala 480) ao redor.
@@ -85,6 +87,18 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     }
   };
 
+  /* Tela cheia: QR preto sobre branco no maior tamanho possível, para a câmera ler da tela. */
+  window.ccQrAmpliar = function (texto, rotulo) {
+    var lado = Math.floor(Math.min(window.innerWidth - 16, window.innerHeight - (rotulo ? 120 : 70), 760)), k = Math.max(1, Math.min(3, Math.ceil(window.devicePixelRatio || 1)));
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:zoom-out';
+    var cv = document.createElement('canvas'); cv.width = cv.height = lado * k; cv.style.cssText = 'width:' + lado + 'px;height:' + lado + 'px;display:block';
+    window.ccQrDesenhar(cv.getContext('2d'), 0, 0, lado * k, texto, { nivel: 'M', qz: 4, escuro: '#000000', claro: '#ffffff' });
+    var d = document.createElement('div'); d.textContent = 'Toque para fechar'; d.style.cssText = 'font:600 12px sans-serif;color:#6b7280;margin-top:8px';
+    if (rotulo) { var r = document.createElement('div'); r.textContent = rotulo; r.style.cssText = 'font:900 28px sans-serif;color:#000;margin-bottom:6px'; ov.appendChild(r); }
+    ov.appendChild(cv); ov.appendChild(d); ov.onclick = function () { ov.remove(); }; document.body.appendChild(ov);
+  };
+
   window.ccQrPNGDataURL = function (texto, size, logo, qz) {
     var cv = document.createElement('canvas'); cv.width = cv.height = size;
     window.ccQrDesenhar(cv.getContext('2d'), 0, 0, size, texto, { logo: logo || null, qz: qz == null ? 4 : qz, nivel: 'H' });
@@ -98,12 +112,15 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     if (this._o.text) this.makeCode(this._o.text);
   }
   QR.prototype.makeCode = function (t) {
-    var o = this._o, w = o.width, cv = this._cv;
+    /* Canvas na resolução real da tela (módulos nítidos), margem branca de 4 módulos (padrão QR), toque para ampliar. */
+    var o = this._o, w = o.width, k = Math.max(1, Math.min(4, Math.ceil(window.devicePixelRatio || 1))), cv = this._cv;
     if (!cv) { cv = this._cv = document.createElement('canvas'); this._el.appendChild(cv); }
-    cv.width = w; cv.height = o.height; cv.style.width = w + 'px'; cv.style.height = o.height + 'px';
-    window.ccQrDesenhar(cv.getContext('2d'), 0, 0, w, t, {
-      nivel: NIVEL[o.correctLevel] || 'M', escuro: o.colorDark, claro: o.colorLight, logo: o.logo, qz: o.qz == null ? 2 : o.qz
+    cv.width = w * k; cv.height = o.height * k; cv.style.width = w + 'px'; cv.style.height = o.height + 'px';
+    window.ccQrDesenhar(cv.getContext('2d'), 0, 0, w * k, t, {
+      nivel: NIVEL[o.correctLevel] || 'M', escuro: o.colorDark, claro: o.colorLight, logo: o.logo, qz: o.qz == null ? 4 : o.qz
     });
+    this._txt = t; cv.style.cursor = 'zoom-in'; cv.title = 'Toque para ampliar';
+    cv.onclick = function () { window.ccQrAmpliar(t); };
   };
   QR.prototype.clear = function () { if (this._cv && this._cv.parentNode) this._cv.parentNode.removeChild(this._cv); this._cv = null; };
   QR.CorrectLevel = { L: 1, M: 0, Q: 3, H: 2 };
@@ -7517,17 +7534,10 @@ async function renderQRMesa() {
       const larg = Math.max(240, Math.min(440, window.innerWidth - 90));   // cabe no cartão (padding+borda) em qualquer tela
       const pv = ccFit(cv, larg);
       pv.title = "Toque para ampliar";
-      pv.onclick = () => {
-        const ov = document.createElement("div");
-        ov.style.cssText = "position:fixed;inset:0;z-index:99999;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:zoom-out;padding:8px";
-        const w2 = Math.floor(Math.min(window.innerWidth - 16, (window.innerHeight - 40) * cv.width / cv.height));
-        const big = ccFit(cv, w2); big.style.cursor = "zoom-out"; big.style.borderRadius = "0";
-        const dica = document.createElement("div"); dica.textContent = "Toque para fechar"; dica.style.cssText = "font:600 12px sans-serif;color:#6b7280;margin-top:6px";
-        ov.appendChild(big); ov.appendChild(dica); ov.onclick = () => ov.remove(); document.body.appendChild(ov);
-      };
+      pv.onclick = () => window.ccQrAmpliar(link, "MESA " + String(mesa).padStart(2, "0"));
       box.innerHTML = "";
       box.appendChild(pv);
-      const dicaP = document.createElement("p"); dicaP.className = "text-xs text-gray-400"; dicaP.style.cssText = "margin-top:6px;text-align:center"; dicaP.textContent = "Toque na etiqueta para ampliar";
+      const dicaP = document.createElement("p"); dicaP.className = "text-xs text-gray-400"; dicaP.style.cssText = "margin-top:6px;text-align:center"; dicaP.textContent = "Toque na etiqueta para ampliar o QR";
       box.appendChild(dicaP);
     }
   } catch(e) {
@@ -10371,7 +10381,7 @@ function _renderQRCards() {
   grid.innerHTML = configs2.map(c => `
     <div style="border:2px solid ${c.cor};border-radius:16px;padding:14px;background:${c.bg}">
       <p style="font-weight:800;font-size:.85rem;color:${c.cor};margin-bottom:8px">${c.label}</p>
-      <div id="qr-${c.key}" style="width:120px;height:120px;margin:0 auto 10px;background:#fff;padding:4px;border-radius:8px"></div>
+      <div id="qr-${c.key}" style="width:208px;height:208px;max-width:100%;margin:0 auto 10px;background:#fff;padding:4px;border-radius:8px"></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <input value="${urls[c.key]}" readonly
           style="flex:1;border:1px solid ${c.cor};border-radius:8px;padding:5px 8px;font-size:.62rem;font-family:monospace;background:#fff;color:#374151;min-width:0"/>
@@ -13162,7 +13172,7 @@ window._injetarPainelQR = function() {
         ? "Modo Praia ativo — 4 QR Codes disponíveis com preços separados."
         : "Modo Praia desativado — operação padrão com cardápio único."}
     </p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px" id="qr-cards-grid"></div>`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px" id="qr-cards-grid"></div>`;
   const qrMesaCardRef = Array.from(adminEl.querySelectorAll(".admin-card")).find(
     c => c.querySelector("h3") && c.querySelector("h3").textContent.includes("Gerar QR Code da Mesa")
   );
@@ -13178,7 +13188,7 @@ function _renderQRCards2(confs, urls) {
   grid.innerHTML = confs.map(c => `
     <div style="border:2px solid ${c.cor};border-radius:16px;padding:14px;background:${c.bg}">
       <p style="font-weight:800;font-size:.85rem;color:${c.cor};margin-bottom:8px">${c.label}</p>
-      <div id="qr-${c.key}" style="width:120px;height:120px;margin:0 auto 10px;background:#fff;padding:4px;border-radius:8px"></div>
+      <div id="qr-${c.key}" style="width:208px;height:208px;max-width:100%;margin:0 auto 10px;background:#fff;padding:4px;border-radius:8px"></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <input value="${urls[c.key]||''}" readonly
           style="flex:1;border:1px solid ${c.cor};border-radius:8px;padding:5px 8px;font-size:.6rem;font-family:monospace;background:#fff;min-width:0"/>
@@ -13196,8 +13206,8 @@ function _renderQRCards2(confs, urls) {
       const wrap = document.getElementById("qr-"+c.key);
       if(!wrap || wrap.querySelector("canvas,img") || !urls[c.key]) return;
       try {
-        new QRCode(wrap, { text:urls[c.key], width:112, height:112,
-          colorDark:"#0f2340", colorLight:"#ffffff", correctLevel:QRCode.CorrectLevel.M });
+        new QRCode(wrap, { text:urls[c.key], width:200, height:200,
+          colorDark:"#000000", colorLight:"#ffffff", correctLevel:QRCode.CorrectLevel.M });
       } catch(e) {}
     });
   });
@@ -22866,7 +22876,18 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     window.ccBaixarBlob(blob, nome);
     return Promise.resolve();
   };
-  function canvasParaBlob(cv) { return new Promise(function (res, rej) { cv.toBlob(function (b) { b ? res(b) : rej(new Error('toBlob')); }, 'image/png'); }); }
+  function canvasParaBlob(cv) {
+    return new Promise(function (res, rej) {
+      cv.toBlob(function (b) {
+        if (b) return res(b);
+        try {   /* fallback: alguns navegadores devolvem null no toBlob de canvas grande */
+          var d = cv.toDataURL('image/png').split(','), bin = atob(d[1]), u = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+          res(new Blob([u], { type: 'image/png' }));
+        } catch (e) { rej(new Error('toBlob')); }
+      }, 'image/png');
+    });
+  }
   function slug(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'arquivo'; }
   function pad2(n) { return String(n).padStart(2, '0'); }
   function tz(t) { if (typeof window.toast === 'function') window.toast(t); }
