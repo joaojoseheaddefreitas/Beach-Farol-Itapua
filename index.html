@@ -6,7 +6,7 @@
       parâmetro ?role= que o SirAccess já entende; NÃO mexe no motor de mesas/QR/mapa.
    2) ?mesa=N / ?cliente=true em aparelho que NÃO é da equipe SEMPRE vira role=cliente — sobrescreve qualquer
       &role=dono / &role=admin que alguém tente anexar ao link.
-   3) Sem parâmetro de perfil (acesso de Proprietário): esconde a tela até o PIN ser validado. */
+   Sem parâmetro de perfil = acesso do Proprietário, direto, sem senha. */
 (function () {
   try {
     var u = new URL(location.href), q = u.searchParams;
@@ -26,21 +26,6 @@
     }
     if (mudou) history.replaceState(null, '', u.pathname + '?' + q.toString() + u.hash);
 
-    var role = q.get('role');
-    var rolesLivres = ['cliente', 'atendente', 'motoboy', 'cozinheiro'];
-    var semPerfilNaUrl = !mesa && !flag('cliente') && (!role || rolesLivres.indexOf(role) < 0);
-    var hashRole = (location.hash || '').replace('#', '');
-    if (semPerfilNaUrl && !(hashRole && rolesLivres.indexOf(hashRole) >= 0)) {
-      var ate = parseInt(localStorage.getItem('solbahia_pin_dono_ok_ate') || '0', 10);
-      if (!(ate > Date.now())) {
-        var st = document.createElement('style');
-        st.id = 'cc-prelock';
-        st.textContent = 'body>*:not(#cc-pin-dono){visibility:hidden!important}';
-        document.head.appendChild(st);
-        /* rede de segurança contra travar o app se o script da parede falhar */
-        setTimeout(function () { var s = document.getElementById('cc-prelock'); if (s && !window.__ccParedeOk) s.remove(); }, 8000);
-      }
-    }
   } catch (e) {}
 })();
 </script>
@@ -22965,7 +22950,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
 (function () {
   'use strict';
   var P = 'solbahia_';
-  var ROLES_PIN = ['livre', 'dono', 'gerente', 'admin', 'caixa'];           // exigem PIN do Proprietário
+  var ROLES_PIN = [];   /* PIN desativado a pedido do dono: acesso do Proprietário é direto */           // exigem PIN do Proprietário
   var PERMITE = {                                                           // views que cada papel restrito enxerga
     cliente:   ['mesa-cliente', 'cardapio'],
     atendente: ['atendente', 'mesas', 'cardapio'],
@@ -23023,7 +23008,6 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
 
   function aposTrocaDeTela(name) {
     if (name === 'caixa' && typeof window.ccDlCardCaixa === 'function') setTimeout(window.ccDlCardCaixa, 150);
-    if (name === 'admin') setTimeout(injetarCardPin, 350);
   }
 
   /* ── 2. PIN do Proprietário ──────────────────────────────────────── */
