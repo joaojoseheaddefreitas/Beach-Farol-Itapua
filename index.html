@@ -37,6 +37,11 @@
       set('role', 'atendente');
     }
     if (mudou) history.replaceState(null, '', u.pathname + '?' + q.toString() + u.hash);
+    if (q.get('role') === 'motoboy') {   /* motoboy: nenhuma tela do Admin aparece nem por um instante */
+      var stM = document.createElement('style'); stM.id = 'cc-pre-motoboy';
+      stM.textContent = '#ab-clean-home,#cc-topbar-wrapper,#role-bar,#nav-main-wrapper,#cart-footer,[id^="view-"]{display:none!important}';
+      (document.head || document.documentElement).appendChild(stM);
+    }
 
   } catch (e) {}
 })();
@@ -9758,7 +9763,10 @@ async function confirmarDelivery(editId) {
   const geoDelivery = await ccCapturarGeoDelivery();
 
   const pagAtivo = document.querySelector("#dl-pag-opts .popt.on");
-  const pag = pagAtivo ? pagAtivo.dataset.pay : "pix";
+  const _semContato = !!((document.getElementById("dl-sem-contato") || {}).checked);
+  const _instrEntrega = ((document.getElementById("dl-instr") || {}).value || "").trim();
+  if(_semContato && !_instrEntrega) { toast("⚠️ Sem contato: diga onde deixar o pedido"); return; }
+  const pag = _semContato ? "pix" : (pagAtivo ? pagAtivo.dataset.pay : "pix");   // sem contato = Pix antecipado obrigatório
 
   // VIP check
   let vipId = null;
@@ -9810,6 +9818,16 @@ async function confirmarDelivery(editId) {
     longitude:   geoDelivery ? geoDelivery.lng : (editId ? (pedidosDelivery.find(p => p.id === editId)?.longitude ?? null) : null),
   };
 
+  novoPed.sem_contato = _semContato;
+  novoPed.instrucoes_entrega = _semContato ? _instrEntrega : "";
+  try {   // latitude/longitude: link/coordenada colada do WhatsApp tem prioridade; senão tenta o endereço digitado
+    if(typeof ccDlCoordsDeTexto === "function") {
+      const _gw = ccDlCoordsDeTexto((document.getElementById("dl-geo-whats") || {}).value || "");
+      const _ge = (novoPed.latitude == null) ? ccDlCoordsDeTexto(end + " " + novoPed.complemento) : null;
+      const _g = _gw || _ge;
+      if(_g) { novoPed.latitude = _g.lat; novoPed.longitude = _g.lng; novoPed.geo_origem = _gw ? "whatsapp" : "endereco_texto"; }
+    }
+  } catch(e) { console.warn("[delivery] coords:", e); }
   if(editId) {
     const idx = pedidosDelivery.findIndex(p => p.id === editId);
     if(idx >= 0) pedidosDelivery[idx] = Object.assign({}, pedidosDelivery[idx], novoPed);
@@ -9972,6 +9990,7 @@ function renderDelivery() {
             style="border:none;border-radius:8px;background:#33ccff;color:#0f2340;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer">
             🚗 Waze
           </button>` : ""}
+        ${typeof ccDlBotoesExtra === "function" ? ccDlBotoesExtra(ped) : ""}
         <button onclick="_whatsDelivery('${ped.id}')"
           style="border:none;border-radius:8px;background:#25d366;color:#fff;padding:7px 10px;font-size:.72rem;font-weight:700;cursor:pointer">
           📲
@@ -22492,12 +22511,9 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
         '<div style="font-size:1.25rem;font-weight:900;color:#0f2340;margin-top:4px">' + esc(p.cliente || 'Cliente') + '</div>' +
         '<div style="font-size:1.5rem;font-weight:900;color:#ea580c;margin-top:2px">' + brl(total) + '</div>' +
         '<div style="font-size:.78rem;color:#6b7280;margin-top:2px">📍 ' + esc(p.endereco || '') + '</div>' +
+        (p.sem_contato ? '<div style="margin-top:6px;padding:8px 10px;border-radius:10px;background:#fef3c7;border:1.5px solid #f59e0b;color:#92400e;font-weight:800;font-size:.85rem">📦 SEM CONTATO — deixar: ' + esc(p.instrucoes_entrega || '(sem instrução)') + '</div>' : '') +
         (p.telefone ? '<div style="font-size:.8rem;margin-top:2px"><a href="tel:' + esc(String(p.telefone).replace(/[^\d+]/g, '')) + '" style="color:#0369a1;font-weight:800">📞 ' + esc(p.telefone) + '</a></div>' : '') +
-        '<button type="button" data-act="gps" style="' + bt + 'width:100%;margin-top:12px;background:#0891b2">🗺️ ABRIR GPS</button>' +
-        '<div style="display:flex;gap:8px;margin-top:8px">' +
-          '<button type="button" data-act="waze" style="' + bt + 'background:#33ccff;color:#0f2340">🚗 Waze</button>' +
-          '<button type="button" data-act="ok" style="' + bt + 'background:#16a34a">✅ ENTREGUE</button>' +
-        '</div></div>';
+        pagBloco(p, total) + acoesCard(p, total, bt) + '</div>';
     }).join('');
     $('mb-det').innerHTML = '';
   }
@@ -22512,7 +22528,11 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       var c = b.closest('.mb-card'), id = c && c.getAttribute('data-id');
       var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
       var act = b.getAttribute('data-act');
-      if (act === 'gps') abrirExterno(p, 'gm'); else if (act === 'waze') abrirExterno(p, 'wz'); else if (act === 'ok') {
+      if (act === 'gps') abrirExterno(p, 'gm'); else if (act === 'waze') abrirExterno(p, 'wz');
+      else if (act === 'cobrar') cobrar(p);
+      else if (act === 'tap') { S.tap = S.tap || {}; S.tap[p.id] = !S.tap[p.id]; render(); }
+      else if (act === 'foto') tirarFoto(p);
+      else if (act === 'ok' || act === 'tapok') {
         if (b.__armado) { confirmarEntrega(p.id, true); return; }   /* 2º toque confirma */
         b.__armado = true; var txt = b.textContent, cor = b.style.background;
         b.textContent = '👆 TOQUE DE NOVO PARA CONFIRMAR'; b.style.background = '#ea580c';
@@ -22659,14 +22679,153 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     } catch (e) { S.nuvem = 'offline'; }
   }
 
+  /* ── Pagamento / foto no card do motoboy ──
+     Pix só vira "PAGO" quando o webhook real marca pago_confirmado em cobrancas_mesa. Tap (app Mercado Pago) e dinheiro
+     ficam como "pendente na entrega" e o Caixa confere no acerto do motoboy. */
+  var PAG_TXT = { dinheiro: '💵 DINHEIRO', pix: '💸 PIX', cartao_maq: '💳 CARTÃO (TAP)', credito_especial: '⭐ CRÉDITO VIP — NÃO COBRAR' };
+  function pagPendente(p) { return !p.sem_contato && ['pix', 'cartao_maq', 'dinheiro'].indexOf(p.pag) >= 0 && !p.pagamento_confirmado_em; }
+  function pagBloco(p, total) {
+    S.pag = S.pag || {}; var st = S.pag[p.id] || {};
+    var cx = 'margin-top:8px;padding:10px;border-radius:12px;font-weight:900;font-size:.95rem;text-align:center;';
+    if (p.pagamento_confirmado_em)
+      return '<div style="' + cx + 'background:#dcfce7;border:1.5px solid #16a34a;color:#166534">✅ PAGO (' + (p.pagamento_confirmado_via === 'pix' ? 'Pix' : 'cartão') + ') · ' + brl(total) + '</div>';
+    if (p.sem_contato) return '';
+    var k = p.pag, h = PAG_TXT[k] ? '<div style="' + cx + 'background:#fffbeb;border:1.5px solid #fde68a;color:#92400e">' + (k === 'credito_especial' ? PAG_TXT[k] : 'COBRAR ' + PAG_TXT[k] + ' · ' + brl(total)) + '</div>' : '';
+    if (st.qr) h += '<img alt="Pix" src="data:image/png;base64,' + st.qr + '" style="width:210px;max-width:100%;display:block;margin:8px auto;background:#fff;border-radius:8px">';
+    return h;
+  }
+  /* Os 3 botões do card: GPS · TAP/DINHEIRO · PIX (ou FOTO no sem contato / ENTREGUE quando já está pago) */
+  function acoesCard(p, total, bt) {
+    S.tap = S.tap || {}; S.pag = S.pag || {}; var st = S.pag[p.id] || {};
+    var big = bt + 'width:100%;margin-top:8px;';
+    var h = '<button type="button" data-act="gps" style="' + bt + 'width:100%;margin-top:12px;background:#0891b2">🗺️ ABRIR GPS</button>' +
+      '<div style="text-align:center;margin-top:4px"><button type="button" data-act="waze" style="border:0;background:none;color:#0369a1;font-weight:800;font-size:.8rem;text-decoration:underline;padding:6px">ou abrir no Waze</button></div>';
+    if (st.msg) h += '<div style="margin-top:4px;font-size:.78rem;font-weight:700;color:#374151;text-align:center">' + esc(st.msg) + '</div>';
+    if (p.sem_contato) return h + '<button type="button" data-act="foto" style="' + big + 'background:#7c3aed">📸 TIRAR FOTO DA ENTREGA</button>';
+    if (p.pag === 'credito_especial' || p.pagamento_confirmado_em) return h + '<button type="button" data-act="ok" style="' + big + 'background:#16a34a">✅ ENTREGUE</button>';
+    h += '<button type="button" data-act="tap" style="' + big + 'background:#2563eb">💳 PAGAMENTO NO TAP / DINHEIRO</button>';
+    if (S.tap[p.id])
+      h += '<div style="margin-top:8px;padding:12px;border:2px solid #2563eb;border-radius:12px;background:#eff6ff;font-size:.85rem;color:#1e3a8a;font-weight:700;line-height:1.5">' +
+        '💳 <b>Tap:</b> Abra o app do Mercado Pago, selecione cobrar via Tap e aproxime o cartão. Valor: <b>' + brl(total) + '</b>.<br>' +
+        '💵 <b>Dinheiro:</b> receba <b>' + brl(total) + '</b> em mãos.' +
+        '<button type="button" data-act="tapok" style="' + big + 'background:#16a34a">✅ CONFIRMAR RECEBIMENTO E ENTREGAR</button></div>';
+    return h + '<button type="button" data-act="cobrar" style="' + big + 'background:#0f766e">🔗 PIX DINÂMICO</button>';
+  }
+  /* Pix exclusivo do pedido (mesmo backend do Admin): order_id = delivery-<id>, numeroMesa = "delivery" */
+  function pixPedido(p) {
+    var cfg = window.COOKCONTROL_CONFIG || {}, emp = window.COOKCONTROL_EMPRESA_ID_ATIVA || cfg.empresaId;
+    var total = Math.round(((Number(p.total) || 0) + (Number(p.taxa_entrega) || 0)) * 100) / 100, orderId = 'delivery-' + p.id;
+    if (!cfg.paymentsApiBase || /SEU-BACKEND/.test(cfg.paymentsApiBase) || !emp) return Promise.reject(new Error('Pix automático indisponível agora. Avise o Caixa.'));
+    return fetch(cfg.paymentsApiBase + '/payments/process', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-empresa-id': emp },
+      body: JSON.stringify({ provider: 'mercadopago', serialNumber: 'cliente-autoatendimento', tipoPagamento: 'pix',
+        orderData: { orderId: orderId, numeroMesa: 'delivery', valorTotal: total, itensPedido: [{ nome: 'Delivery ' + String(p.numero || p.id), quantidade: 1, preco: total }] } })
+    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d || {} }; }); })
+      .then(function (x) {
+        if (!x.ok) throw new Error(x.d.erro || 'Falha ao gerar o Pix.');
+        if (!(x.d.pix && x.d.pix.qrCodeBase64)) throw new Error('Resposta inesperada do servidor de pagamentos.');
+        escutarPagamento(p.id, orderId);
+        return { qr: x.d.pix.qrCodeBase64, total: total, orderId: orderId };
+      });
+  }
+  function cobrar(p) {
+    if (p.sem_contato) return;
+    S.pag = S.pag || {}; var st = S.pag[p.id] = S.pag[p.id] || {};
+    st.msg = '⏳ Gerando o Pix...'; st.qr = ''; render();
+    pixPedido(p).then(function (r) { st.qr = r.qr; st.msg = 'Aguardando o cliente pagar...'; render(); })
+      .catch(function (e) { st.msg = '❌ ' + (e && e.message ? e.message : 'Sem conexão. Tente de novo.'); render(); });
+  }
+  function escutarPagamento(id, orderId) {
+    var sb = typeof ccGetSupabaseClient === 'function' ? ccGetSupabaseClient() : null; if (!sb) return;
+    var canal = sb.channel('cobranca-' + orderId).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cobrancas_mesa', filter: 'order_id=eq.' + orderId }, function (payload) {
+      if (!payload || !payload.new || payload.new.status !== 'pago_confirmado') return;
+      var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+      p.pagamento_confirmado_em = new Date().toISOString(); p.pagamento_confirmado_via = 'pix';
+      if (typeof salvarDelivery === 'function') salvarDelivery();
+      try { sb.removeChannel(canal); } catch (e) {}
+      render(); try { if (typeof renderDelivery === 'function' && document.getElementById('dl-lista')) renderDelivery(); } catch (e) {}
+      var mg = document.getElementById('_modal_gen'); if (mg) mg.remove();
+      try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) {}
+      toastz('✅ Pagamento confirmado!');
+    }).subscribe();
+  }
+  /* Admin: Pix antecipado do pedido sem contato + baixa manual do Caixa (as duas únicas formas de confirmar Pix) */
+  window.ccDlPixAntecipado = function (id) {
+    var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+    pixPedido(p).then(function (r) {
+      if (typeof _modalGen === 'function') _modalGen('💸 Pix antecipado — ' + brl(r.total),
+        '<p style="font-size:.82rem;color:#374151">Cliente: <b>' + esc(p.cliente || '') + '</b></p><img alt="Pix" src="data:image/png;base64,' + r.qr + '" style="width:220px;max-width:100%;display:block;margin:10px auto"><p style="font-size:.74rem;color:#6b7280;text-align:center">Aguardando pagamento. Esta tela fecha sozinha quando o Pix for confirmado.</p>');
+    }).catch(function (e) { toastz('❌ ' + (e && e.message ? e.message : 'Sem conexão.')); });
+  };
+  window.ccDlBaixaManualPix = function (id) {
+    var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+    if (!confirm('Confirmar que o Pix de ' + brl((Number(p.total) || 0) + (Number(p.taxa_entrega) || 0)) + ' de ' + (p.cliente || 'cliente') + ' CAIU na conta? (baixa manual do Caixa)')) return;
+    p.pagamento_confirmado_em = new Date().toISOString(); p.pagamento_confirmado_via = 'pix'; p.pagamento_baixa_manual = true;
+    if (typeof salvarDelivery === 'function') salvarDelivery();
+    try { if (typeof renderDelivery === 'function') renderDelivery(); } catch (e) {}
+    toastz('✅ Pix confirmado pelo Caixa.');
+  };
+  /* ── Foto da entrega (sem contato): câmera do celular → Supabase Storage → ENTREGUE ── */
+  function reduzirFoto(file, cb) {
+    var feito = false, fim = function (f) { if (!feito) { feito = true; cb(f); } };
+    setTimeout(function () { fim(file); }, 4000);   /* se o navegador não conseguir reduzir, envia o original */
+    try {
+      var img = new Image(), url = URL.createObjectURL(file);
+      img.onload = function () {
+        var s = Math.min(1, 1280 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+        c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        c.toBlob(function (b) { URL.revokeObjectURL(url); fim(b ? new File([b], 'entrega.jpg', { type: 'image/jpeg' }) : file); }, 'image/jpeg', 0.8);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); fim(file); };
+      img.src = url;
+    } catch (e) { fim(file); }
+  }
+  function tirarFoto(p) {
+    var inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment');
+    inp.onchange = function () { var f = inp.files && inp.files[0]; if (f) enviarFoto(p.id, f); };
+    inp.click();
+  }
+  function enviarFoto(id, file) {
+    S.pag = S.pag || {}; var st = S.pag[id] = S.pag[id] || {};
+    st.msg = '⏳ Enviando a foto...'; render();
+    reduzirFoto(file, function (f) {
+      if (typeof _uploadImagemParaStorage !== 'function') { st.msg = '❌ Envio de foto indisponível neste aparelho.'; render(); return; }
+      _uploadImagemParaStorage(f, 'entregas').then(function (url) {
+        var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+        p.foto_entrega_url = url; p.foto_entrega_em = new Date().toISOString();
+        if (typeof salvarDelivery === 'function') salvarDelivery();
+        st.msg = ''; confirmarEntrega(id, true);
+        fotoOk(p, url);
+      }).catch(function (e) { st.msg = '❌ Foto não enviada (' + (e && e.message ? e.message : 'sem internet') + '). Tente de novo.'; render(); });
+    });
+  }
+  /* Confirmação visual ao cliente: abre o WhatsApp com a foto (um toque do motoboy; envio 100% automático exigiria a API do WhatsApp Business no servidor) */
+  function fotoOk(p, url) {
+    var tel = String(p.telefone || '').replace(/\D/g, ''); if (tel.length >= 10 && tel.indexOf('55') !== 0) tel = '55' + tel;
+    var msg = 'Olá' + (p.cliente ? ', ' + p.cliente : '') + '! Seu pedido foi entregue 📦 Foto da entrega: ' + url;
+    var wa = tel.length >= 12 ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(msg) : '';
+    var o = document.createElement('div'); o.id = 'mb-foto-ok';
+    o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px';
+    o.innerHTML = '<div style="background:#fff;border-radius:18px;padding:16px;max-width:340px;width:100%;text-align:center">' +
+      '<div style="font-weight:900;color:#166534;font-size:1.1rem">✅ Entrega registrada</div>' +
+      '<img alt="Foto da entrega" src="' + esc(url) + '" style="width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:8px">' +
+      (wa ? '<a href="' + esc(wa) + '" target="_blank" rel="noopener" style="display:block;margin-top:10px;padding:14px;border-radius:12px;background:#25d366;color:#fff;font-weight:900;text-decoration:none">📲 ENVIAR FOTO AO CLIENTE (WhatsApp)</a>'
+          : '<div style="margin-top:10px;font-size:.8rem;color:#6b7280">Pedido sem telefone — o link da foto ficou salvo no Admin.</div>') +
+      '<button type="button" id="mb-foto-x" style="margin-top:10px;width:100%;padding:12px;border:0;border-radius:12px;background:#f3f4f6;font-weight:800;color:#374151">Fechar</button></div>';
+    document.body.appendChild(o); $('mb-foto-x').onclick = function () { o.remove(); };
+  }
+  window.ccMotoboyEnviarFoto = enviarFoto;
+
   /* ── Confirmar entrega ───────────────────────────────────────────── */
   function confirmarEntrega(id, pular) {
     var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
     if (!pular && !confirm('Confirmar que o pedido de ' + (p.cliente || 'cliente') + ' foi ENTREGUE?')) return;
     p.entrega_confirmada_por = S.nome;
     p.entrega_confirmada_em = new Date().toISOString();
+    if (pagPendente(p)) p.pagamento_pendente_na_entrega = true;   /* dinheiro / Tap / Pix sem webhook: o Caixa confere no acerto do motoboy */
     if (!String(p.motoboy || '').trim()) p.motoboy = S.nome;   /* garante o vínculo: o fechamento agrupa por p.motoboy */
-    if (p.pag === 'dinheiro') p.dinheiro_em_maos = Math.round(((Number(p.total) || 0) + (Number(p.taxa_entrega) || 0)) * 100) / 100;
+    if (p.pag === 'dinheiro' && !p.pagamento_confirmado_em) p.dinheiro_em_maos = Math.round(((Number(p.total) || 0) + (Number(p.taxa_entrega) || 0)) * 100) / 100;
     if (S.pos) p.entrega_geo = { lat: S.pos.lat, lng: S.pos.lng, prec: S.pos.prec };
     if (typeof salvarDelivery === 'function') salvarDelivery();
     if (typeof avancarDelivery === 'function') avancarDelivery(id, 'entregue');
@@ -22719,6 +22878,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (p.status === 'entregue') { toastz('✅ Este pedido já foi entregue.'); return; }
     if (p.status === 'saiu' && p.motoboy && norm(p.motoboy) !== norm(S.nome)) { toastz('⚠️ Este pedido já saiu com ' + p.motoboy + '.'); return; }
     if (p.status === 'recebido' || p.status === 'preparo') { toastz('⏳ Pedido ainda em preparo — só sai quando estiver PRONTO.'); return; }
+    if (p.sem_contato && !p.pagamento_confirmado_em) { toastz('💸 Pedido SEM CONTATO ainda sem Pix confirmado. Fale com o Caixa.'); return; }
     p.motoboy = S.nome; if (S.cad) { p.motoboy_telefone = S.cad.telefone; if (S.cad.placa) p.motoboy_placa = S.cad.placa; }
     try {
       if (p.status !== 'saiu' && typeof avancarDelivery === 'function') avancarDelivery(p.id, 'saiu');
@@ -22824,6 +22984,41 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       l('🛵 Entregador', v.ent, '#0369a1') + l('🧑‍🤝‍🧑 Brigada', v.bri, '#7c3aed') + '</div>';
   };
 
+  /* Extras do modal: localização do WhatsApp + entrega sem contato (Pix antecipado obrigatório) */
+  window.ccDlCamposExtra = function (p) {
+    var lb = 'font-size:.72rem;font-weight:700;color:#6b7280;display:block;margin-bottom:4px';
+    var geo = (p && p.latitude != null && p.longitude != null && p.geo_origem === 'whatsapp') ? (p.latitude + ',' + p.longitude) : '';
+    setTimeout(function () { try { window.ccDlSemContatoToggle(); } catch (e) {} }, 60);
+    return '<div style="margin-bottom:12px"><label style="' + lb + '">📍 Localização enviada no WhatsApp (cole o link do mapa ou "lat,lng")</label>' +
+        '<input id="dl-geo-whats" class="input-base" autocomplete="off" placeholder="https://maps.google.com/?q=-12.95,-38.36" value="' + esc(geo) + '"/></div>' +
+      '<div style="margin-bottom:12px;border:1.5px dashed #f59e0b;background:#fffbeb;border-radius:12px;padding:10px">' +
+        '<label style="display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:800;color:#92400e;cursor:pointer">' +
+          '<input id="dl-sem-contato" type="checkbox" onchange="ccDlSemContatoToggle()"' + (p && p.sem_contato ? ' checked' : '') + '> 📦 Deixar na porta / Sem contato</label>' +
+        '<p style="font-size:.68rem;color:#92400e;margin-top:4px">Exige Pix antecipado. O motoboy só tira a foto da entrega; não cobra nada.</p>' +
+        '<div id="dl-instr-wrap" style="display:none;margin-top:8px"><label style="' + lb + '">Instruções de onde deixar o pedido</label>' +
+          '<input id="dl-instr" class="input-base" placeholder="Ex.: com o porteiro / em frente ao portão azul" value="' + esc(p ? (p.instrucoes_entrega || '') : '') + '"/></div>' +
+      '</div>';
+  };
+  window.ccDlSemContatoToggle = function () {
+    var cb = document.getElementById('dl-sem-contato'); if (!cb) return;
+    var on = !!cb.checked, w = document.getElementById('dl-instr-wrap'); if (w) w.style.display = on ? 'block' : 'none';
+    document.querySelectorAll('#dl-pag-opts .popt').forEach(function (o) {
+      var pix = o.dataset.pay === 'pix';
+      o.style.opacity = (on && !pix) ? '.35' : ''; o.style.pointerEvents = (on && !pix) ? 'none' : '';
+      if (on && pix && typeof selDeliveryPag === 'function') selDeliveryPag(o);
+    });
+  };
+  /* Coordenadas coladas do WhatsApp: "lat,lng" ou link do Google Maps (@lat,lng / ?q=lat,lng / ll= / destination=) */
+  window.ccDlCoordsDeTexto = function (t) {
+    t = String(t || ''); if (!t.trim()) return null;
+    var m = t.match(/@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/) ||
+            t.match(/[?&](?:q|ll|query|destination)=(-?\d{1,2}\.\d+)(?:,|%2C)(-?\d{1,3}\.\d+)/i) ||
+            t.match(/(-?\d{1,2}\.\d{3,})\s*[,;]\s*(-?\d{1,3}\.\d{3,})/);
+    if (!m) return null;
+    var la = parseFloat(m[1]), lo = parseFloat(m[2]);
+    return (Math.abs(la) <= 90 && Math.abs(lo) <= 180 && (la || lo)) ? { lat: la, lng: lo } : null;
+  };
+
   /* Campos estruturados do modal "Novo Pedido Delivery": motoboy, tempo estimado e taxa de entrega */
   window.ccDlCampos = function (p) {
     var c = window.ccDlCfg(), mb = window.ccDlMotoboysConhecidos();
@@ -22836,7 +23031,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
         '<input id="dl-eta" type="number" min="1" step="1" class="input-base" value="' + esc(p && p.tempo_estimado_min ? p.tempo_estimado_min : c.eta) + '"/></div>' +
       '<div style="grid-column:1/-1"><label style="' + lb + '">💵 Taxa de entrega (R$)</label>' +
         '<input id="dl-taxa" type="number" min="0" step="0.01" class="input-base" value="' + esc(p && p.taxa_entrega != null ? p.taxa_entrega : c.taxa) + '"/></div>' +
-    '</div>';
+    '</div>' + window.ccDlCamposExtra(p);
   };
 
   /* ── Painel financeiro do Delivery ───────────────────────────────── */
@@ -22849,11 +23044,49 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       var k = String(p.motoboy || '').trim() || '— sem motoboy —';
       var r = g[k] = g[k] || { nome: k, n: 0, sub: 0, taxa: 0, cEnt: 0, cBri: 0 };
       r.n++; r.sub += v.sub; r.taxa += v.taxa; r.cEnt += v.ent; r.cBri += v.bri;
-      if (p.pag === 'dinheiro') { r.din = (r.din || 0) + v.sub + v.taxa; tot.din = (tot.din || 0) + v.sub + v.taxa; }
+      if (p.pag === 'dinheiro' && !p.pagamento_confirmado_em) { r.din = (r.din || 0) + v.sub + v.taxa; tot.din = (tot.din || 0) + v.sub + v.taxa; }
       tot.n++; tot.sub += v.sub; tot.taxa += v.taxa; tot.cEnt += v.ent; tot.cBri += v.bri;
     });
     return { iso: iso, linhas: Object.keys(g).sort().map(function (k) { return g[k]; }), tot: tot, andamento: andamento, fatDia: fatDia, pedidosDia: doDia.length };
   }
+  /* ── Pendências do acerto: dinheiro / cartão (Tap) / Pix cobrados na rua e ainda não conferidos pelo Caixa ── */
+  function formaPend(p) { return p.pag === 'dinheiro' ? '💵 Dinheiro' : p.pag === 'cartao_maq' ? '💳 Cartão (Tap)' : '💸 Pix (sem webhook)'; }
+  function pendenciasHtml() {
+    var hoje = diaISO(new Date());
+    var pend = lista().filter(function (p) { return p.pagamento_pendente_na_entrega && !p.pagamento_conferido_em; });
+    var conf = lista().filter(function (p) { return p.pagamento_pendente_na_entrega && p.pagamento_conferido_em && diaISO(p.pagamento_conferido_em) === hoje; });
+    if (!pend.length && !conf.length) return '';
+    var g = {}, tot = 0, porForma = {};
+    pend.forEach(function (p) {
+      var k = String(p.motoboy || '').trim() || '— sem motoboy —', v = valores(p).total;
+      (g[k] = g[k] || { nome: k, itens: [], soma: 0 }); g[k].itens.push(p); g[k].soma += v; tot += v;
+      porForma[formaPend(p)] = (porForma[formaPend(p)] || 0) + v;
+    });
+    var totConf = conf.reduce(function (a, p) { return a + valores(p).total; }, 0);
+    var h = '<div style="margin-top:12px;border:2px solid #f59e0b;background:#fffbeb;border-radius:14px;padding:12px">' +
+      '<p style="font-weight:900;color:#92400e;font-size:.85rem">⏳ Pagamentos a conferir com o motoboy (cobrados na rua)</p>' +
+      '<p style="font-size:.74rem;color:#92400e;margin:4px 0 8px">A conferir: <b>' + brl(tot) + '</b>' +
+        Object.keys(porForma).map(function (k) { return ' · ' + k + ' <b>' + brl(porForma[k]) + '</b>'; }).join('') +
+        ' · Conferido hoje: <b>' + brl(totConf) + '</b>. Compare com o extrato da conta e o dinheiro entregue.</p>';
+    Object.keys(g).sort().forEach(function (k) {
+      h += '<p style="font-weight:800;color:#0f2340;font-size:.78rem;margin-top:8px">🛵 ' + esc(g[k].nome) + ' — ' + brl(g[k].soma) + '</p>';
+      g[k].itens.forEach(function (p) {
+        h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:1px solid #fde68a;padding:6px 0">' +
+          '<div style="font-size:.74rem;color:#374151"><b>#' + esc(String(p.numero || p.id).slice(0, 15)) + '</b> · ' + esc(p.cliente || 'Cliente') + ' · ' + formaPend(p) +
+            ' · <b>' + brl(valores(p).total) + '</b> · ' + (p.entregueEm ? hhmm(p.entregueEm) : '') + '</div>' +
+          '<button type="button" data-conf="' + esc(p.id) + '" onclick="ccDlConfirmarRecebimento(this.getAttribute(\'data-conf\'))" style="border:0;border-radius:8px;background:#16a34a;color:#fff;padding:7px 12px;font-size:.72rem;font-weight:800">Confirmar Recebimento</button></div>';
+      });
+    });
+    return h + '</div>';
+  }
+  window.ccDlConfirmarRecebimento = function (id) {
+    var p = lista().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+    if (!confirm('Confirmar que o Caixa recebeu ' + brl(valores(p).total) + ' (' + formaPend(p) + ') de ' + (p.motoboy || 'motoboy') + '?')) return;
+    p.pagamento_conferido_em = new Date().toISOString(); p.pagamento_conferido_por = 'Caixa';
+    if (typeof salvarDelivery === 'function') salvarDelivery();
+    if (typeof renderDelivery === 'function') renderDelivery();
+    if (typeof window.toast === 'function') window.toast('✅ Recebimento confirmado.');
+  };
   window.ccDlRenderFinanceiro = function () {
     var lst = document.getElementById('dl-lista'); if (!lst) return;
     var host = document.getElementById('dl-financeiro');
@@ -22887,7 +23120,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       (d.linhas.length ? '<tfoot><tr style="border-top:2px solid #0f2340"><td style="padding:6px 8px;font-weight:900;font-size:.78rem">TOTAL</td><td style="' + td + ';font-weight:900">' + d.tot.n + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.sub) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.taxa) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.cEnt) + '</td><td style="' + td + ';font-weight:900">' + brl(d.tot.cBri) + '</td></tr></tfoot>' : '') + '</table></div>' +
       (d.tot.din ? '<p style="font-size:.74rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin-top:8px">💵 Dinheiro recebido na porta (a acertar com o caixa): <b>' + brl(d.tot.din) + '</b> — ' + d.linhas.filter(function (r) { return r.din; }).map(function (r) { return esc(r.nome) + ' ' + brl(r.din); }).join(' · ') + '</p>' : '') +
       (d.andamento.n ? '<p style="font-size:.72rem;color:#b45309;margin-top:8px">⏳ ' + d.andamento.n + ' pedido(s) ainda em andamento (' + brl(d.andamento.sub) + ' em itens) — entram no fechamento quando forem marcados como entregues.</p>' : '') +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn-primary px-4 py-2 text-xs" type="button" onclick="ccDlCopiarFechamento()">📋 Copiar fechamento</button></div>' +
+      '' + pendenciasHtml() + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn-primary px-4 py-2 text-xs" type="button" onclick="ccDlCopiarFechamento()">📋 Copiar fechamento</button></div>' +
       '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:.75rem;font-weight:800;color:#0f2340">⚙️ Regras de valores e comissões</summary>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:8px">' +
           '<label style="font-size:.68rem;font-weight:700;color:#6b7280">Taxa de entrega padrão (R$)<input id="dl-cfg-taxa" type="number" step="0.01" min="0" value="' + c.taxa + '" style="' + campo + '"></label>' +
@@ -23297,11 +23530,58 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       .then(function () { setTimeout(proximo, 1100); });
   }
 
+  /* ── Rota real por ruas: OSRM (OpenStreetMap), da Barraca até o cliente. Cache por pedido; se falhar, segue a linha reta ── */
+  var ROTA_PFX = 'cc_rota_osrm_', rotaFila = [], rotaPend = {}, rotaFalha = {}, rotaRod = false;
+  window.ccDlRota = function (p) {
+    var d = destino(p); if (!d) return null;
+    try { var c = JSON.parse(localStorage.getItem(ROTA_PFX + p.id) || 'null'); if (c && Math.abs(c.lat - d.lat) < 1e-5 && Math.abs(c.lng - d.lng) < 1e-5) return c; } catch (e) {}
+    return null;
+  };
+  window.ccDlAgendarRota = function (p) {
+    var d = destino(p); if (!d || rotaPend[p.id] || (rotaFalha[p.id] && Date.now() - rotaFalha[p.id] < 60000)) return;
+    rotaPend[p.id] = 1; rotaFila.push({ id: p.id, d: d }); if (!rotaRod) rotaProx();
+  };
+  function rotaProx() {
+    var it = rotaFila.shift(); if (!it) { rotaRod = false; return; }
+    rotaRod = true;
+    var ctl = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ctl) ctl.abort(); }, 9000);
+    fetch('https://router.project-osrm.org/route/v1/driving/' + BARRACA.lng + ',' + BARRACA.lat + ';' + it.d.lng + ',' + it.d.lat + '?overview=false', { signal: ctl ? ctl.signal : undefined })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        clearTimeout(t);
+        var r0 = j && j.routes && j.routes[0]; if (!r0) throw new Error('sem rota');
+        try { localStorage.setItem(ROTA_PFX + it.id, JSON.stringify({ km: Math.round(r0.distance / 100) / 10, min: Math.max(1, Math.round(r0.duration / 60)), lat: it.d.lat, lng: it.d.lng, em: Date.now(), fonte: 'osrm' })); } catch (e) {}
+        try { if (typeof renderDelivery === 'function' && document.getElementById('dl-lista')) renderDelivery(); } catch (e) {}
+      }).catch(function () { clearTimeout(t); rotaFalha[it.id] = Date.now(); })
+      .then(function () { delete rotaPend[it.id]; setTimeout(rotaProx, 400); });
+  }
+  /* Só ordena por tempo de rota quando TODOS os prontos já têm rota calculada (comparação coerente); senão usa a linha reta */
+  window.ccDlRotasCompletas = function () {
+    var l = (typeof pedidosDelivery !== 'undefined' ? pedidosDelivery : []).filter(function (x) { return x.status === 'pronto' && destino(x); });
+    return l.length > 0 && l.every(function (x) { return !!window.ccDlRota(x); });
+  };
+  /* Extras no card do Admin: sem contato (Pix antecipado), foto da entrega e pendência de conferência */
+  window.ccDlBotoesExtra = function (p) {
+    var h = '', bt = 'border:none;border-radius:8px;color:#fff;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer;text-decoration:none;';
+    if (p.sem_contato) {
+      h += '<div style="flex-basis:100%;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:10px;padding:8px 10px;font-size:.74rem;color:#92400e;font-weight:700">📦 SEM CONTATO — deixar: ' +
+        esc(p.instrucoes_entrega || '(sem instrução)') + ' · ' + (p.pagamento_confirmado_em ? '✅ Pix antecipado confirmado' : '⚠️ Pix antecipado PENDENTE') + '</div>';
+      if (!p.pagamento_confirmado_em && p.status !== 'entregue' && p.status !== 'cancelado') {
+        h += '<button type="button" onclick="ccDlPixAntecipado(\'' + esc(p.id) + '\')" style="' + bt + 'background:#16a34a">💸 Gerar Pix antecipado</button>' +
+             '<button type="button" onclick="ccDlBaixaManualPix(\'' + esc(p.id) + '\')" style="' + bt + 'background:#0f2340">✅ Baixa manual (Caixa)</button>';
+      }
+    }
+    if (p.foto_entrega_url && /^https:\/\//.test(p.foto_entrega_url)) h += '<a href="' + esc(p.foto_entrega_url) + '" target="_blank" rel="noopener" style="' + bt + 'background:#7c3aed">📸 Ver foto da entrega</a>';
+    if (p.pagamento_pendente_na_entrega && !p.pagamento_conferido_em) h += '<span style="flex-basis:100%;font-size:.7rem;font-weight:800;color:#b45309">⏳ Pagamento cobrado na rua — a conferir no acerto do motoboy</span>';
+    return h;
+  };
+
   /* Ordem de saída: do menor para o maior km; sem coordenada vai para o fim (mais antigo primeiro) */
   window.ccDlOrdenarPorKm = function (a, b) {
     var ka = window.ccDlKm(a), kb = window.ccDlKm(b);
     if (ka == null && kb == null) return new Date(a.data) - new Date(b.data);
     if (ka == null) return 1; if (kb == null) return -1;
+    if (window.ccDlRotasCompletas()) { var ra = window.ccDlRota(a), rb = window.ccDlRota(b); if (ra && rb) { if (ra.min !== rb.min) return ra.min - rb.min; if (ra.km !== rb.km) return ra.km - rb.km; } }
     return ka - kb;
   };
   function posicaoNaFila(p) {
@@ -23313,14 +23593,14 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   /* Bloco exibido em cada card (só EM PREPARO e PRONTOS) */
   window.ccDlBlocoDespacho = function (p) {
     if (p.status !== 'preparo' && p.status !== 'pronto') return '';
-    var km = window.ccDlKm(p); if (km == null) geocodificar(p);
+    var km = window.ccDlKm(p); if (km == null) geocodificar(p); else if (!window.ccDlRota(p)) window.ccDlAgendarRota(p);
     var pos = p.status === 'pronto' ? posicaoNaFila(p) : null;
     var id = esc(p.id);
     return '<div style="display:flex;gap:12px;align-items:center;border:1.5px dashed #c4b5fd;background:#faf5ff;border-radius:12px;padding:10px;margin-bottom:10px">' +
       '<canvas class="cc-dl-qr" data-id="' + id + '" width="132" height="132" style="width:96px;height:96px;background:#fff;border-radius:8px;flex:none"></canvas>' +
       '<div style="min-width:0;font-size:.74rem;color:#4c1d95;line-height:1.45">' +
         (pos ? '<div style="font-weight:900;font-size:.95rem;color:#7c3aed">🏁 Saída nº ' + pos + '</div>' : '<div style="font-weight:800">QR do pedido (para o motoboy ler)</div>') +
-        '<div>📏 ' + (km == null ? 'calculando distância…' : '<b>' + kmTxt(km) + '</b> da barraca (linha reta)') + '</div>' +
+        (window.ccDlRota(p) ? '<div>🛣️ <b>' + kmTxt(window.ccDlRota(p).km) + '</b> por rua · ~<b>' + window.ccDlRota(p).min + ' min</b> de moto</div>' : '<div>📏 ' + (km == null ? 'calculando distância…' : '<b>' + kmTxt(km) + '</b> da barraca (linha reta)') + '</div>') +
         '<div style="font-size:.66rem;color:#7c3aed;word-break:break-all">' + id + '</div>' +
         '<button type="button" onclick="ccDlImprimirQR(\'' + id + '\')" style="margin-top:4px;border:0;border-radius:8px;background:#7c3aed;color:#fff;padding:5px 10px;font-size:.7rem;font-weight:800">🖨️ Imprimir QR</button>' +
       '</div></div>';
