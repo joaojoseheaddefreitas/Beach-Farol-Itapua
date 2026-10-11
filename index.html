@@ -22993,24 +22993,19 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
 </script>
 <script id="cc-mod-02">
 /* ═══════════════════════════════════════════════════════════════════════
-   PAREDE DE ACESSO — isolamento de telas por parâmetro de URL + PIN do Proprietário
+   PAREDE DE ACESSO — isolamento de telas por parâmetro de URL
    Fica POR FORA das interfaces: só lê o papel já calculado pelo SirAccess, remove do DOM o que o
    papel não pode ver e bloqueia showView(). NÃO toca no motor de mesas (QR/GPS/mapa canvas/reset/60px).
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
   var P = 'solbahia_';
-  var ROLES_PIN = [];   /* PIN desativado a pedido do dono: acesso do Proprietário é direto */           // exigem PIN do Proprietário
   var PERMITE = {                                                           // views que cada papel restrito enxerga
     cliente:   ['mesa-cliente', 'cardapio'],
     atendente: ['atendente', 'mesas', 'cardapio'],
     motoboy:   []                                                           // só o container #cc-motoboy-root
   };
-  var HORAS_SESSAO = 12, MAX_ERROS = 5, BLOQ_SEG = 60;
 
-  function lsGet(k) { try { return localStorage.getItem(P + k); } catch (e) { return null; } }
-  function lsSet(k, v) { try { localStorage.setItem(P + k, v); } catch (e) {} }
-  function lsDel(k) { try { localStorage.removeItem(P + k); } catch (e) {} }
   function papel() { try { return window.SirAccess && window.SirAccess.getRole(); } catch (e) { return null; } }
 
   /* ── 1. Compartimentos de tela ───────────────────────────────────── */
@@ -23026,6 +23021,13 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       el.replaceWith(stub);
     });
     ['ab-clean-home', 'cc-capa-institucional'].forEach(function (id) { var e = document.getElementById(id); if (e) e.remove(); });
+    if (role === 'cliente') {   /* cabeçalho/abas do admin: conteúdo REMOVIDO do DOM (resta um stub vazio e oculto, id preservado) */
+      ['cc-topbar-wrapper', 'role-bar', 'nav-main-wrapper'].forEach(function (id) {
+        var e = document.getElementById(id); if (!e || e.getAttribute('data-bloqueado')) return;
+        var stub = document.createElement('div'); stub.id = id; stub.hidden = true; stub.style.display = 'none';
+        stub.setAttribute('data-bloqueado', '1'); e.replaceWith(stub);
+      });
+    }
     document.querySelectorAll('#nav-main [data-view]').forEach(function (b) { if (permit.indexOf(b.dataset.view) < 0) b.remove(); });
     if (!document.getElementById('cc-parede-css')) {
       var st = document.createElement('style'); st.id = 'cc-parede-css';
@@ -23060,104 +23062,6 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (name === 'caixa' && typeof window.ccDlCardCaixa === 'function') setTimeout(window.ccDlCardCaixa, 150);
   }
 
-  /* ── 2. PIN do Proprietário ──────────────────────────────────────── */
-  function hashPin(pin) {
-    var sal = 'cc-pin|' + ((window.COOKCONTROL_CONFIG && window.COOKCONTROL_CONFIG.empresaId) || 'cc') + '|' + pin;
-    if (window.crypto && crypto.subtle && window.TextEncoder) {
-      return crypto.subtle.digest('SHA-256', new TextEncoder().encode(sal)).then(function (b) {
-        return Array.prototype.map.call(new Uint8Array(b), function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
-      });
-    }
-    var h1 = 5381, h2 = 52711;
-    for (var i = 0; i < sal.length; i++) { var c = sal.charCodeAt(i); h1 = ((h1 << 5) + h1) ^ c; h2 = ((h2 << 5) + h2) ^ c; }
-    return Promise.resolve('f' + (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16));
-  }
-  function sessaoValida() { return parseInt(lsGet('pin_dono_ok_ate') || '0', 10) > Date.now(); }
-  function liberar() {
-    window.__ccParedeOk = true;
-    var s = document.getElementById('cc-prelock'); if (s) s.remove();
-    var o = document.getElementById('cc-pin-dono'); if (o) o.remove();
-    document.body.classList.remove('cc-bloqueado');
-  }
-  function abrirSessao() { lsSet('pin_dono_ok_ate', String(Date.now() + HORAS_SESSAO * 3600 * 1000)); }
-
-  function mostrarPin(modo) {            // modo: 'entrar' | 'criar' | 'trocar'
-    var tem = !!lsGet('pin_dono_hash');
-    modo = modo || (tem ? 'entrar' : 'criar');
-    var velho = document.getElementById('cc-pin-dono'); if (velho) velho.remove();
-    document.body.classList.add('cc-bloqueado');
-    var ov = document.createElement('div'); ov.id = 'cc-pin-dono';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483600;background:#0f2340;display:flex;align-items:center;justify-content:center;padding:20px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;visibility:visible!important';
-    var caixa = document.createElement('div');
-    caixa.style.cssText = 'background:#fff;border-radius:20px;max-width:360px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.4)';
-    var titulo = { entrar: '🔐 Acesso do Proprietário', criar: '🔐 Criar PIN do Proprietário', trocar: '🔐 Trocar PIN' }[modo];
-    var sub = { entrar: 'Digite seu PIN para abrir o painel completo.', criar: 'Primeiro acesso neste aparelho: defina um PIN de 4 a 8 dígitos.', trocar: 'Informe o PIN atual e o novo PIN.' }[modo];
-    caixa.innerHTML = '<h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f2340;font-weight:900"></h2><p style="margin:0 0 14px;font-size:.8rem;color:#6b7280"></p>';
-    caixa.children[0].textContent = titulo; caixa.children[1].textContent = sub;
-    function campo(id, ph) {
-      var i = document.createElement('input'); i.type = 'password'; i.id = id; i.placeholder = ph; i.inputMode = 'numeric'; i.autocomplete = 'off'; i.maxLength = 8;
-      i.style.cssText = 'width:100%;box-sizing:border-box;margin-bottom:10px;padding:12px;border:2px solid #e5e7eb;border-radius:12px;font-size:1.1rem;text-align:center;letter-spacing:.3em';
-      caixa.appendChild(i); return i;
-    }
-    var atual = (modo === 'entrar' || modo === 'trocar') ? campo('cc-pin-atual', modo === 'trocar' ? 'PIN atual' : 'PIN') : null;
-    var novo = (modo === 'criar' || modo === 'trocar') ? campo('cc-pin-novo', 'Novo PIN (4–8 dígitos)') : null;
-    var conf = novo ? campo('cc-pin-conf', 'Repita o novo PIN') : null;
-    var msg = document.createElement('p'); msg.style.cssText = 'min-height:18px;margin:0 0 10px;font-size:.78rem;color:#dc2626;font-weight:700;text-align:center'; caixa.appendChild(msg);
-    var btn = document.createElement('button'); btn.type = 'button'; btn.textContent = modo === 'entrar' ? 'Entrar' : 'Salvar PIN';
-    btn.style.cssText = 'width:100%;padding:13px;border:0;border-radius:12px;background:#0f2340;color:#fff;font-weight:800;font-size:.95rem;cursor:pointer';
-    caixa.appendChild(btn);
-    if (modo === 'trocar') {
-      var cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancelar';
-      cancel.style.cssText = 'width:100%;margin-top:8px;padding:11px;border:0;border-radius:12px;background:#f3f4f6;color:#374151;font-weight:700;cursor:pointer';
-      cancel.onclick = function () { ov.remove(); document.body.classList.remove('cc-bloqueado'); };
-      caixa.appendChild(cancel);
-    }
-    var aviso = document.createElement('p'); aviso.style.cssText = 'margin:14px 0 0;font-size:.68rem;color:#9ca3af;text-align:center';
-    aviso.textContent = 'O PIN fica salvo só neste aparelho. Esqueceu? Limpe os dados do site e crie outro.';
-    caixa.appendChild(aviso);
-    ov.appendChild(caixa); document.body.appendChild(ov);
-    (atual || novo).focus();
-
-    var erros = 0;
-    function erro(t) { msg.textContent = t; }
-    function ok4a8(v) { return /^\d{4,8}$/.test(v); }
-    btn.onclick = function () {
-      var bloq = parseInt(lsGet('pin_dono_bloq_ate') || '0', 10);
-      if (bloq > Date.now()) { erro('Muitas tentativas. Aguarde ' + Math.ceil((bloq - Date.now()) / 1000) + 's.'); return; }
-      if (modo === 'criar') {
-        if (!ok4a8(novo.value)) { erro('Use de 4 a 8 números.'); return; }
-        if (novo.value !== conf.value) { erro('Os dois PINs não conferem.'); return; }
-        hashPin(novo.value).then(function (h) { lsSet('pin_dono_hash', h); abrirSessao(); liberar(); });
-        return;
-      }
-      hashPin(atual.value).then(function (h) {
-        if (h !== lsGet('pin_dono_hash')) {
-          erros++; if (erros >= MAX_ERROS) { lsSet('pin_dono_bloq_ate', String(Date.now() + BLOQ_SEG * 1000)); erros = 0; erro('PIN incorreto. Bloqueado por ' + BLOQ_SEG + 's.'); }
-          else erro('PIN incorreto (' + erros + '/' + MAX_ERROS + ').');
-          atual.value = ''; return;
-        }
-        if (modo === 'entrar') { abrirSessao(); liberar(); return; }
-        if (!ok4a8(novo.value)) { erro('Use de 4 a 8 números.'); return; }
-        if (novo.value !== conf.value) { erro('Os dois PINs não conferem.'); return; }
-        hashPin(novo.value).then(function (h2) { lsSet('pin_dono_hash', h2); abrirSessao(); ov.remove(); document.body.classList.remove('cc-bloqueado'); if (typeof window.toast === 'function') window.toast('✅ PIN alterado'); });
-      });
-    };
-    ov.addEventListener('keydown', function (e) { if (e.key === 'Enter') btn.click(); });
-  }
-
-  function injetarCardPin() {
-    var adm = document.getElementById('view-admin');
-    if (!adm || document.getElementById('cc-card-pin')) return;
-    var c = document.createElement('div'); c.id = 'cc-card-pin'; c.className = 'admin-card mb-4';
-    c.innerHTML = '<h3 class="font-bold text-sm text-gray-600 mb-2">🔐 PIN do Proprietário</h3>' +
-      '<p class="text-xs text-gray-400 mb-3">Protege o painel completo (Admin, Caixa, Relatórios) em acesso sem parâmetros na URL. A sessão dura ' + HORAS_SESSAO + 'h.</p>' +
-      '<button class="btn-primary px-4 py-2.5 text-xs" type="button" id="cc-pin-trocar">🔑 Trocar PIN</button> ' +
-      '<button class="btn-ghost px-4 py-2.5 text-xs" type="button" id="cc-pin-sair">🔒 Bloquear agora</button>';
-    adm.insertBefore(c, adm.firstChild);
-    document.getElementById('cc-pin-trocar').onclick = function () { mostrarPin('trocar'); };
-    document.getElementById('cc-pin-sair').onclick = function () { lsDel('pin_dono_ok_ate'); location.reload(); };
-  }
-
   /* ── 3. Orquestração ─────────────────────────────────────────────── */
   var aplicado = null;
   function aplicar(role) {
@@ -23166,20 +23070,8 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (PERMITE[role]) { purgar(role); guardarShowView(role); }
     else guardarShowView(role);                               /* todos os papéis: encadeia os gatilhos pós-troca de tela */
     if (role === 'motoboy' && typeof window.ccMotoboyIniciar === 'function') window.ccMotoboyIniciar();
-    if (ROLES_PIN.indexOf(role) >= 0) { if (sessaoValida()) liberar(); else if (!document.getElementById('cc-pin-dono')) mostrarPin(); }
-    else liberar();
   }
 
-  /* "Sair ↩" também derruba a sessão do PIN */
-  try {
-    if (window.SirAccess && !window.SirAccess.__ccPin) {
-      var logoutOrig = window.SirAccess.logout;
-      window.SirAccess.logout = function () { lsDel('pin_dono_ok_ate'); return logoutOrig.apply(this, arguments); };
-      window.SirAccess.__ccPin = true;
-    }
-  } catch (e) {}
-
-  window.ccPinDonoAbrir = mostrarPin;
   window.addEventListener('sir:role_ready', function (ev) { aplicado = null; aplicar(ev && ev.detail && ev.detail.role); });
   var r0 = papel();
   if (r0) aplicar(r0);
