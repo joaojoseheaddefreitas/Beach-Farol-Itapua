@@ -58,19 +58,28 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     qr.make();
     var n = qr.getModuleCount(), qz = o.qz == null ? 0 : o.qz, tot = n + qz * 2, cel = size / tot;
     if (o.fundo !== false) { ctx.fillStyle = o.claro || '#ffffff'; ctx.fillRect(x, y, size, size); }
+    /* Zona do logo: lado = sqrt(5%) do QR (área do logo <= 5%) + máscara branca quadrada de 4 px (escala 480) ao redor.
+       A zona é alinhada à grade de módulos: módulo tocado pela máscara NÃO é desenhado (nenhum bloco preto encosta na marca). */
+    var temLogo = !!(o.logo && o.logo.width), lado = size * 0.2236, pad = 4 * size / 480, cx = x + size / 2, cy = y + size / 2;
+    var mx0 = cx - lado / 2 - pad, my0 = cy - lado / 2 - pad, mx1 = cx + lado / 2 + pad, my1 = cy + lado / 2 + pad;
+    var zc0 = Infinity, zr0 = Infinity, zc1 = -1, zr1 = -1;
     ctx.fillStyle = o.escuro || '#000000';
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
+        var cx0 = x + (c + qz) * cel, cx1 = cx0 + cel, cy0 = y + (r + qz) * cel, cy1 = cy0 + cel;
+        if (temLogo && cx1 > mx0 && cx0 < mx1 && cy1 > my0 && cy0 < my1) {
+          if (c < zc0) zc0 = c; if (c > zc1) zc1 = c; if (r < zr0) zr0 = r; if (r > zr1) zr1 = r;
+          continue;
+        }
         if (!qr.isDark(r, c)) continue;
-        var x0 = Math.round(x + (c + qz) * cel), x1 = Math.round(x + (c + qz + 1) * cel);
-        var y0 = Math.round(y + (r + qz) * cel), y1 = Math.round(y + (r + qz + 1) * cel);
+        var x0 = Math.round(cx0), x1 = Math.round(cx1), y0 = Math.round(cy0), y1 = Math.round(cy1);
         ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
       }
     }
-    if (o.logo && o.logo.width) {
-      var lado = size * 0.22, pad = 4 * size / 480, cx = x + size / 2, cy = y + size / 2;   /* máscara branca quadrada, 4 px de segurança (na etiqueta 1200x1700) */
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(Math.round(cx - lado / 2 - pad), Math.round(cy - lado / 2 - pad), Math.round(lado + pad * 2), Math.round(lado + pad * 2));
+    if (temLogo && zc1 >= 0) {
+      var bx0 = Math.round(x + (zc0 + qz) * cel), bx1 = Math.round(x + (zc1 + qz + 1) * cel);
+      var by0 = Math.round(y + (zr0 + qz) * cel), by1 = Math.round(y + (zr1 + qz + 1) * cel);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
       var k = Math.min(lado / o.logo.width, lado / o.logo.height), w = o.logo.width * k, h = o.logo.height * k;
       ctx.drawImage(o.logo, cx - w / 2, cy - h / 2, w, h);
     }
@@ -7448,15 +7457,10 @@ function popularSelectCliente() {
 
 // ─── GERAR LINK DO CLIENTE ────────────────────────────────────
 function gerarLinkCliente(mesa) {
-  // Link oficial do QR da mesa: endereço de produção FIXO (nunca o endereço em que o admin está aberto) + ?mesa=N&role=cliente, sem "#".
-  const modelo = "https://beach-farol-itapua.vercel.app/?mesa={mesa}&role=cliente";
-  // TRAVA DE SEGURANÇA: higieniza (espaços e caracteres invisíveis) e RECUSA se {mesa} ou role=cliente sumirem, ou se houver "#".
-  const limpo = String(modelo).replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, "");
+  // Link oficial do QR da mesa: endereço de produção FIXO + ?mesa=N. Nada além disso (sem role, sem hash, sem texto extra).
   const num = String(mesa).replace(/[^0-9]/g, "");
-  if (!num || limpo.indexOf("{mesa}") === -1 || limpo.indexOf("role=cliente") === -1 || limpo.indexOf("#") !== -1) {
-    throw new Error("Link do QR inválido (faltou {mesa} ou role=cliente, ou há '#'). Impressão bloqueada.");
-  }
-  return limpo.replace("{mesa}", num);
+  if (!num) throw new Error("Número de mesa inválido. Impressão bloqueada.");
+  return "https://beach-farol-itapua.vercel.app/?mesa=" + num;
 }
 
 // ─── GERAR QR DA MESA ─────────────────────────────────────────
@@ -7497,9 +7501,34 @@ async function renderQRMesa() {
   try {
     const cv = await ccEtiquetaCanvas(mesa);
     if(tk === window._ccEtiquetaTk) {
-      cv.style.cssText = "width:260px;max-width:100%;height:auto;display:block;border-radius:6px";
+      // Prévia nítida e GRANDE: o QR precisa de ~150 px+ na tela para a câmera do celular ler. Reduz em etapas (sem moiré) já na resolução real da tela.
+      const ccFit = (src, cssW) => {
+        const dpr = Math.min(window.devicePixelRatio || 1, 3), tw = Math.round(cssW * dpr);
+        let cur = src;
+        while (cur.width / 2 > tw) {
+          const t = document.createElement("canvas"); t.width = Math.round(cur.width / 2); t.height = Math.round(cur.height / 2);
+          const c2 = t.getContext("2d"); c2.imageSmoothingQuality = "high"; c2.drawImage(cur, 0, 0, t.width, t.height); cur = t;
+        }
+        const o = document.createElement("canvas"); o.width = tw; o.height = Math.round(tw * src.height / src.width);
+        const c3 = o.getContext("2d"); c3.imageSmoothingQuality = "high"; c3.drawImage(cur, 0, 0, o.width, o.height);
+        o.style.cssText = "width:" + cssW + "px;height:" + Math.round(cssW * src.height / src.width) + "px;display:block;border-radius:6px;cursor:zoom-in";
+        return o;
+      };
+      const larg = Math.max(240, Math.min(440, window.innerWidth - 90));   // cabe no cartão (padding+borda) em qualquer tela
+      const pv = ccFit(cv, larg);
+      pv.title = "Toque para ampliar";
+      pv.onclick = () => {
+        const ov = document.createElement("div");
+        ov.style.cssText = "position:fixed;inset:0;z-index:99999;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:zoom-out;padding:8px";
+        const w2 = Math.floor(Math.min(window.innerWidth - 16, (window.innerHeight - 40) * cv.width / cv.height));
+        const big = ccFit(cv, w2); big.style.cursor = "zoom-out"; big.style.borderRadius = "0";
+        const dica = document.createElement("div"); dica.textContent = "Toque para fechar"; dica.style.cssText = "font:600 12px sans-serif;color:#6b7280;margin-top:6px";
+        ov.appendChild(big); ov.appendChild(dica); ov.onclick = () => ov.remove(); document.body.appendChild(ov);
+      };
       box.innerHTML = "";
-      box.appendChild(cv);
+      box.appendChild(pv);
+      const dicaP = document.createElement("p"); dicaP.className = "text-xs text-gray-400"; dicaP.style.cssText = "margin-top:6px;text-align:center"; dicaP.textContent = "Toque na etiqueta para ampliar";
+      box.appendChild(dicaP);
     }
   } catch(e) {
     box.innerHTML = '<p class="text-xs text-gray-500" style="padding:20px">Não foi possível montar a etiqueta.</p>';
@@ -22877,10 +22906,10 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       x.font = 'bold ' + fn + 'px ' + FONTE; x.textAlign = 'center'; x.fillText(num, W / 2, 400 + (336 + fn * 0.716) / 2);
 
       /* QR com cantos e logomarca no centro */
-      var qs = 480, qx = (W - qs) / 2, qy = 790;
-      window.ccQrDesenhar(x, qx, qy, qs, link, { logo: logo, qz: 0, nivel: 'H' });
+      var qs = 540, qx = (W - qs) / 2, qy = 772;   /* 540 px já incluem a margem branca de 4 módulos exigida pelo padrão QR */
+      window.ccQrDesenhar(x, qx, qy, qs, link, { logo: logo, qz: 4, nivel: 'H' });
       x.strokeStyle = '#000'; x.lineWidth = 9; x.lineCap = 'butt';
-      var bx = qx - 36, by = qy - 36, bs = qs + 72, bl = 66;
+      var bx = qx - 14, by = qy - 14, bs = qs + 28, bl = 66;   /* cantos FORA da margem branca */
       [[bx, by, 1, 1], [bx + bs, by, -1, 1], [bx, by + bs, 1, -1], [bx + bs, by + bs, -1, -1]].forEach(function (c) {
         x.beginPath(); x.moveTo(c[0], c[1] + c[3] * bl); x.lineTo(c[0], c[1]); x.lineTo(c[0] + c[2] * bl, c[1]); x.stroke();
       });
