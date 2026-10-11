@@ -22393,7 +22393,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   'use strict';
   var S = { nome: '', watch: null, pos: null, mapa: null, mkM: null, mkD: null, linha: null, sel: null,
             ultPub: 0, ultRota: 0, ultRotaPos: null, rota: null, nuvem: '', wake: null, timer: null, geo: {}, leaflet: null };
-  var LS_NOME = 'cc_motoboy_nome', LS_POS = 'cc_motoboy_ultima_pos';
+  var LS_CAD = 'cc_motoboy_cadastro', LS_NOME = 'cc_motoboy_nome', LS_POS = 'cc_motoboy_ultima_pos';
   var ATIVOS = ['recebido', 'preparo', 'pronto', 'saiu'];
   function $(id) { return document.getElementById(id); }
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -22426,13 +22426,23 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
           '<div style="font-weight:900;font-size:1.1rem">🛵 Minhas Entregas</div>' +
           '<div id="mb-gps" style="font-size:.72rem;font-weight:700;background:rgba(255,255,255,.15);padding:4px 10px;border-radius:999px">📡 GPS desligado</div>' +
         '</div>' +
-        '<div style="display:flex;gap:8px;margin-top:12px">' +
+        '<div id="mb-ola" style="display:none;margin-top:10px;font-weight:800;font-size:1rem">👋 Olá, <span id="mb-ola-nome"></span> <a id="mb-trocar" style="font-size:.72rem;font-weight:700;text-decoration:underline;opacity:.8;margin-left:6px">trocar</a></div>' +
+        '<div id="mb-nome-row" style="display:flex;gap:8px;margin-top:12px">' +
           '<input id="mb-nome" placeholder="Seu nome (igual ao cadastrado no pedido)" style="flex:1;min-width:0;padding:10px 12px;border:0;border-radius:10px;font-size:.9rem">' +
           '<button id="mb-nome-ok" type="button" style="padding:10px 14px;border:0;border-radius:10px;background:#22c55e;color:#fff;font-weight:800">Entrar</button>' +
         '</div>' +
       '</div>' +
+      '<div id="mb-cad" style="display:none;padding:12px 12px 0"><div style="background:#fff;border:2px solid #16a34a;border-radius:16px;padding:14px">' +
+        '<div style="font-weight:900;color:#0f2340;font-size:1rem">📝 Cadastro rápido (só na 1ª vez)</div>' +
+        '<input id="mb-cad-nome" placeholder="Nome completo" value="' + esc(S.nome) + '" style="width:100%;margin-top:10px;padding:12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.95rem">' +
+        '<input id="mb-cad-tel" type="tel" inputmode="tel" placeholder="Celular com DDD" style="width:100%;margin-top:8px;padding:12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.95rem">' +
+        '<input id="mb-cad-doc" placeholder="Identidade (RG ou CPF)" style="width:100%;margin-top:8px;padding:12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.95rem">' +
+        '<input id="mb-cad-placa" placeholder="Placa da moto (ex.: ABC1D23)" maxlength="8" autocapitalize="characters" style="width:100%;margin-top:8px;padding:12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.95rem;text-transform:uppercase">' +
+        '<input id="mb-cad-res" placeholder="Endereço de residência" style="width:100%;margin-top:8px;padding:12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.95rem">' +
+        '<button id="mb-cad-ok" type="button" style="width:100%;margin-top:12px;padding:16px;border:0;border-radius:12px;background:#16a34a;color:#fff;font-weight:900;font-size:1rem">SALVAR E COMEÇAR</button>' +
+      '</div></div>' +
       '<div style="padding:12px 12px 0">' +
-        '<button id="mb-scan" type="button" style="width:100%;padding:22px 12px;border:0;border-radius:18px;background:#16a34a;color:#fff;font-weight:900;font-size:1.25rem;box-shadow:0 6px 18px rgba(22,163,74,.35)">📷 Escanear Sacola / Iniciar Entrega</button>' +
+        '<button id="mb-scan" type="button" style="width:100%;padding:34px 12px;border:0;border-radius:22px;background:#16a34a;color:#fff;font-weight:900;font-size:1.5rem;line-height:1.2;box-shadow:0 8px 22px rgba(22,163,74,.4)">📷 ESCANEAR SACOLA<br>(RETIRAR PEDIDO)</button>' +
         '<div id="mb-scan-box" style="display:none;margin-top:10px;background:#fff;border-radius:16px;padding:10px;border:1px solid #e5e7eb">' +
           '<div id="mb-reader" style="width:100%;border-radius:12px;overflow:hidden"></div>' +
           '<div style="display:flex;gap:8px;margin-top:8px"><input id="mb-cod" placeholder="ou digite o código do pedido" style="flex:1;min-width:0;padding:10px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.85rem"><button id="mb-cod-ok" type="button" style="padding:10px 14px;border:0;border-radius:10px;background:#0369a1;color:#fff;font-weight:800">OK</button></div>' +
@@ -22443,8 +22453,20 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       '<div id="mb-det" style="padding:0 12px"></div>';
     document.body.appendChild(r);
     $('mb-nome').value = S.nome;
-    $('mb-nome-ok').onclick = function () { S.nome = $('mb-nome').value.trim(); try { localStorage.setItem(LS_NOME, S.nome); } catch (e) {} S.sel = null; render(); if (S.nome) iniciarGPS(); };
+    $('mb-cad-ok').onclick = function () {
+      var nome = $('mb-cad-nome').value.trim(), tel = $('mb-cad-tel').value.replace(/\D/g, ''), doc = $('mb-cad-doc').value.trim(), res = $('mb-cad-res').value.trim(), placa = $('mb-cad-placa').value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (!nome) { toastz('Digite seu nome.'); return; }
+      if (tel.length < 10) { toastz('Digite seu celular com DDD.'); return; }
+      if (!doc) { toastz('Digite o número da sua identidade (RG ou CPF).'); return; }
+      if (placa.length < 7) { toastz('Digite a placa da moto (7 caracteres).'); return; }
+      S.cad = { nome: nome, telefone: tel, documento: doc, placa: placa, residencia: res, em: new Date().toISOString() }; S.nome = nome;
+      try { localStorage.setItem(LS_CAD, JSON.stringify(S.cad)); localStorage.setItem(LS_NOME, nome); } catch (e) {}
+      S.sel = null; render(); iniciarGPS(); setTimeout(abrirScan, 300);
+    };
+    $('mb-nome-ok').onclick = function () { S.nome = $('mb-nome').value.trim(); try { localStorage.setItem(LS_NOME, S.nome); } catch (e) {} S.sel = null; render(); if (S.nome) { iniciarGPS(); setTimeout(abrirScan, 300); } };
+    $('mb-trocar').onclick = function () { if (!confirm('Sair deste cadastro? Você vai precisar escanear o QR de acesso de novo.')) return; S.cad = null; S.nome = ''; try { localStorage.removeItem(LS_CAD); localStorage.removeItem(LS_NOME); } catch (e) {} S.sel = null; render(); };
     $('mb-nome').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('mb-nome-ok').click(); });
+    ligarCards();
     $('mb-scan').onclick = abrirScan;
     $('mb-scan-x').onclick = function () { pararScan(function () { fecharScanBox(); }); };
     $('mb-cod-ok').onclick = function () { var v = $('mb-cod').value; $('mb-cod').value = ''; pararScan(function () { fecharScanBox(); processarCodigo(v); }); };
@@ -22454,59 +22476,70 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
 
   function render() {
     var el = $('mb-lista'); if (!el) return;
+    var row = $('mb-nome-row'), ola = $('mb-ola'), cadEl = $('mb-cad');
+    if (row) row.style.display = 'none';
+    if (cadEl) cadEl.style.display = 'none';   /* cadastro é feito pelo Admin; o motoboy entra pelo QR */
+    if (ola) { ola.style.display = S.cad ? 'block' : 'none'; $('mb-ola-nome').textContent = S.nome; }
+    if (!S.cad) { el.innerHTML = '<p style="text-align:center;color:#6b7280;font-size:.85rem;padding:20px 10px">🔒 Peça ao administrador o seu QR de acesso e escaneie com a câmera do celular.</p>'; limparMapa(); $('mb-det').innerHTML = ''; return; }
     if (!S.nome) { el.innerHTML = '<p style="text-align:center;color:#6b7280;font-size:.85rem;padding:30px 10px">Digite seu nome para ver os pedidos atribuídos a você.</p>'; limparMapa(); $('mb-det').innerHTML = ''; return; }
     var l = meus();
     if (!l.length) { el.innerHTML = '<p style="text-align:center;color:#6b7280;font-size:.85rem;padding:30px 10px">🏝️ Nenhuma entrega atribuída a <b>' + esc(S.nome) + '</b> agora.</p>'; limparMapa(); $('mb-det').innerHTML = ''; pararGPSSePreciso(); return; }
-    if (!S.sel || !l.some(function (p) { return p.id === S.sel; })) S.sel = l[0].id;
     el.innerHTML = l.map(function (p) {
-      var on = p.id === S.sel, taxa = Number(p.taxa_entrega) || 0, total = (Number(p.total) || 0) + taxa;
-      var st = (typeof DELIVERY_STATUS !== 'undefined' && DELIVERY_STATUS[p.status]) || { emoji: '', label: p.status, cor: '#6b7280' };
-      return '<div data-id="' + esc(p.id) + '" class="mb-card" style="background:#fff;border:2px solid ' + (on ? '#0369a1' : '#e5e7eb') + ';border-radius:16px;padding:12px;margin-bottom:10px;cursor:pointer">' +
-        '<div style="display:flex;justify-content:space-between;gap:8px"><b style="color:#0f2340">' + esc(p.cliente || 'Cliente') + ' <small style="color:#9ca3af;font-weight:600">#' + esc(String(p.id).slice(0, 15)) + '</small></b>' +
-        '<span style="font-size:.68rem;font-weight:800;color:' + st.cor + '">' + st.emoji + ' ' + esc(st.label) + '</span></div>' +
-        '<div style="font-size:.8rem;color:#374151;margin-top:4px">📍 ' + esc(p.endereco) + (p.complemento ? ' · ' + esc(p.complemento) : '') + '</div>' +
-        (p.telefone ? '<div style="font-size:.75rem;color:#6b7280">📞 ' + esc(p.telefone) + '</div>' : '') +
-        '<div style="font-size:.75rem;color:#6b7280;margin-top:4px">⏱️ ' + (p.tempo_estimado_min ? esc(p.tempo_estimado_min) + ' min estimados' : 'sem estimativa') +
-        ' · 💳 ' + esc(((typeof DELIVERY_PAG !== 'undefined' && DELIVERY_PAG[p.pag]) || { label: p.pag }).label) + '</div>' +
-        '<div style="font-size:.8rem;margin-top:6px"><b style="color:#ea580c">' + brl(total) + '</b> <span style="color:#9ca3af">(itens ' + brl(p.total) + ' + entrega ' + brl(taxa) + ')</span></div></div>';
+      var taxa = Number(p.taxa_entrega) || 0, total = (Number(p.total) || 0) + taxa;
+      var bt = 'flex:1;min-width:0;padding:16px 8px;border:0;border-radius:14px;color:#fff;font-weight:900;font-size:1rem;';
+      return '<div class="mb-card" data-id="' + esc(p.id) + '" style="background:#fff;border:2px solid #0369a1;border-radius:18px;padding:14px;margin-bottom:12px">' +
+        '<div style="font-size:.8rem;font-weight:800;color:#0369a1">🛵 NA RUA · Pedido #' + esc(String(p.numero || p.id).slice(0, 15)) + '</div>' +
+        '<div style="font-size:1.25rem;font-weight:900;color:#0f2340;margin-top:4px">' + esc(p.cliente || 'Cliente') + '</div>' +
+        '<div style="font-size:1.5rem;font-weight:900;color:#ea580c;margin-top:2px">' + brl(total) + '</div>' +
+        '<div style="font-size:.78rem;color:#6b7280;margin-top:2px">📍 ' + esc(p.endereco || '') + '</div>' +
+        (p.telefone ? '<div style="font-size:.8rem;margin-top:2px"><a href="tel:' + esc(String(p.telefone).replace(/[^\d+]/g, '')) + '" style="color:#0369a1;font-weight:800">📞 ' + esc(p.telefone) + '</a></div>' : '') +
+        '<button type="button" data-act="gps" style="' + bt + 'width:100%;margin-top:12px;background:#0891b2">🗺️ ABRIR GPS</button>' +
+        '<div style="display:flex;gap:8px;margin-top:8px">' +
+          '<button type="button" data-act="waze" style="' + bt + 'background:#33ccff;color:#0f2340">🚗 Waze</button>' +
+          '<button type="button" data-act="ok" style="' + bt + 'background:#16a34a">✅ ENTREGUE</button>' +
+        '</div></div>';
     }).join('');
-    el.querySelectorAll('.mb-card').forEach(function (c) { c.onclick = function () { S.sel = c.getAttribute('data-id'); S.ultRotaPos = null; render(); }; });
-    detalhe();
+    $('mb-det').innerHTML = '';
   }
 
-  function detalhe() {
-    var p = ped().filter(function (x) { return x.id === S.sel; })[0], det = $('mb-det'); if (!p || !det) return;
-    if (!$('mb-mapa')) {
-      det.innerHTML =
-        '<div style="background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">' +
-          '<div id="mb-mapa" style="height:300px;background:#e5e7eb;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:.8rem">Carregando mapa…</div>' +
-          '<div id="mb-info" style="padding:10px 12px;font-size:.82rem;color:#0f2340;font-weight:700"></div>' +
-          '<div id="mb-acoes" style="display:flex;gap:8px;flex-wrap:wrap;padding:0 12px 12px"></div>' +
-        '</div>';
-      carregarLeaflet(function (ok) { S.leaflet = ok; if (ok) criarMapa(); else $('mb-mapa').textContent = 'Mapa indisponível (sem internet). Use os botões Google Maps / Waze.'; atualizarMapa(); });
-    }
-    var bt = function (txt, cor, fn, id) { return '<button type="button" id="' + id + '" style="flex:1;min-width:120px;padding:12px;border:0;border-radius:12px;background:' + cor + ';color:#fff;font-weight:800;font-size:.82rem">' + txt + '</button>'; };
-    var a = $('mb-acoes');
-    a.innerHTML = bt('🗺️ Iniciar Rota no GPS', '#0891b2', null, 'mb-gm') + bt('🚗 Waze', '#33ccff', null, 'mb-wz') +
-      (p.status !== 'saiu' ? bt('🛵 Saí para entrega', '#0284c7', null, 'mb-saiu') : '') +
-      bt('✅ Confirmar Entrega', '#16a34a', null, 'mb-ok');
-    $('mb-wz').style.color = '#0f2340';
-    $('mb-gm').onclick = function () { abrirExterno(p, 'gm'); };
-    $('mb-wz').onclick = function () { abrirExterno(p, 'wz'); };
-    if ($('mb-saiu')) $('mb-saiu').onclick = function () { if (typeof avancarDelivery === 'function') { avancarDelivery(p.id, 'saiu'); render(); } };
-    $('mb-ok').onclick = function () { confirmarEntrega(p.id); };
-    atualizarMapa();
+  function detalhe() {}   /* painel de mapa removido: visão simplificada (card + 3 botões) */
+
+  /* Um único listener: GPS / Waze / ENTREGUE de qualquer card */
+  function ligarCards() {
+    var el = $('mb-lista'); if (!el || el.__ligado) return; el.__ligado = true;
+    el.addEventListener('click', function (ev) {
+      var b = ev.target.closest ? ev.target.closest('button[data-act]') : null; if (!b) return;
+      var c = b.closest('.mb-card'), id = c && c.getAttribute('data-id');
+      var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
+      var act = b.getAttribute('data-act');
+      if (act === 'gps') abrirExterno(p, 'gm'); else if (act === 'waze') abrirExterno(p, 'wz'); else if (act === 'ok') {
+        if (b.__armado) { confirmarEntrega(p.id, true); return; }   /* 2º toque confirma */
+        b.__armado = true; var txt = b.textContent, cor = b.style.background;
+        b.textContent = '👆 TOQUE DE NOVO PARA CONFIRMAR'; b.style.background = '#ea580c';
+        setTimeout(function () { b.__armado = false; b.textContent = txt; b.style.background = cor; }, 4000);
+      }
+    });
   }
 
+  /* Coordenadas: GPS gravado no pedido → "lat,lng" ou link do Google Maps colado do WhatsApp no endereço → cache */
+  function coordsDe(p) {
+    if (p.latitude && p.longitude) return { lat: Number(p.latitude), lng: Number(p.longitude) };
+    var t = String(p.endereco || '') + ' ' + String(p.complemento || '');
+    var mm = t.match(/@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/) ||
+             t.match(/[?&](?:q|ll|query|destination)=(-?\d{1,2}\.\d+)(?:,|%2C)(-?\d{1,3}\.\d+)/i) ||
+             t.match(/(-?\d{1,2}\.\d{3,})\s*[,;]\s*(-?\d{1,3}\.\d{3,})/);
+    if (mm) { var la = parseFloat(mm[1]), lo = parseFloat(mm[2]); if (Math.abs(la) <= 90 && Math.abs(lo) <= 180) return { lat: la, lng: lo }; }
+    var d = destinoSinc(p); return d ? { lat: d.lat, lng: d.lng } : null;
+  }
   function abrirExterno(p, qual) {
-    var d = destinoSinc(p);
-    if (qual === 'gm') {   /* URL universal do Google Maps: abre direto no app de GPS do celular, com o endereço do cliente codificado */
-      var end = String(p.endereco || '').trim();
-      window.open('https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(end), '_blank');
-      return;
-    }
-    if (!d) { toastz('Sem coordenadas do destino para o Waze.'); return; }
-    window.open('https://waze.com/ul?ll=' + d.lat + ',' + d.lng + '&navigate=yes', '_blank');
+    var c = coordsDe(p), end = String(p.endereco || '').trim();
+    var link = (end + ' ' + String(p.complemento || '')).match(/https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|(?:www\.)?google\.com\/maps)\S+/i);
+    var url;
+    if (qual === 'wz') url = c ? 'https://waze.com/ul?ll=' + c.lat + ',' + c.lng + '&navigate=yes' : 'https://waze.com/ul?q=' + encodeURIComponent(end) + '&navigate=yes';
+    else if (c) url = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + c.lat + ',' + c.lng;
+    else if (link) url = link[0];
+    else url = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(end);
+    window.open(url, '_blank');
   }
 
   /* ── Destino (GPS capturado no pedido → cache → geocodificação do endereço digitado) ── */
@@ -22627,9 +22660,9 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   }
 
   /* ── Confirmar entrega ───────────────────────────────────────────── */
-  function confirmarEntrega(id) {
+  function confirmarEntrega(id, pular) {
     var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
-    if (!confirm('Confirmar que o pedido de ' + (p.cliente || 'cliente') + ' foi ENTREGUE?')) return;
+    if (!pular && !confirm('Confirmar que o pedido de ' + (p.cliente || 'cliente') + ' foi ENTREGUE?')) return;
     p.entrega_confirmada_por = S.nome;
     p.entrega_confirmada_em = new Date().toISOString();
     if (!String(p.motoboy || '').trim()) p.motoboy = S.nome;   /* garante o vínculo: o fechamento agrupa por p.motoboy */
@@ -22640,6 +22673,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     S.sel = null; S.ultRotaPos = null; if (S.linha && S.mapa) { S.mapa.removeLayer(S.linha); S.linha = null; }
     render(); pararGPSSePreciso();
     toastz('✅ Entrega confirmada!');
+    if (!meus().length) setTimeout(abrirScan, 900);
   }
 
   /* ── Leitor de QR (html5-qrcode, carregado só quando o motoboy toca no botão) ── */
@@ -22660,7 +22694,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     try { q.stop().then(fim, fim); } catch (e) { fim(); }
   }
   function abrirScan() {
-    if (!S.nome) { toastz('Digite seu nome e toque em Entrar antes de escanear.'); var n = $('mb-nome'); if (n) n.focus(); return; }
+    if (!S.cad) { toastz('Escaneie primeiro o QR de acesso que o administrador te passou.'); return; }
     $('mb-scan-box').style.display = 'block';
     carregarLeitor(function (ok) {
       if (!ok) { toastz('Leitor de câmera indisponível (sem internet?). Digite o código do pedido abaixo.'); return; }
@@ -22685,7 +22719,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (p.status === 'entregue') { toastz('✅ Este pedido já foi entregue.'); return; }
     if (p.status === 'saiu' && p.motoboy && norm(p.motoboy) !== norm(S.nome)) { toastz('⚠️ Este pedido já saiu com ' + p.motoboy + '.'); return; }
     if (p.status === 'recebido' || p.status === 'preparo') { toastz('⏳ Pedido ainda em preparo — só sai quando estiver PRONTO.'); return; }
-    p.motoboy = S.nome;
+    p.motoboy = S.nome; if (S.cad) { p.motoboy_telefone = S.cad.telefone; if (S.cad.placa) p.motoboy_placa = S.cad.placa; }
     try {
       if (p.status !== 'saiu' && typeof avancarDelivery === 'function') avancarDelivery(p.id, 'saiu');
       else if (typeof salvarDelivery === 'function') salvarDelivery();
@@ -22698,10 +22732,24 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   window.ccMotoboyProcessarCodigo = processarCodigo;
 
   window.ccMotoboyIniciar = function () {
-    try { S.nome = localStorage.getItem(LS_NOME) || ''; } catch (e) {}
+    try { S.cad = JSON.parse(localStorage.getItem(LS_CAD) || 'null'); } catch (e) { S.cad = null; }
+    S.nome = (S.cad && S.cad.nome) || '';
+    try {   /* QR de acesso do Admin: ?mb=<dados> → reconhece o motoboy neste aparelho e limpa o link */
+      var mbp = new URLSearchParams(location.search).get('mb');
+      if (mbp) {
+        var o = JSON.parse(decodeURIComponent(escape(atob(mbp.replace(/-/g, '+').replace(/_/g, '/')))));
+        if (o && o.n && o.t) {
+          S.cad = { nome: String(o.n), telefone: String(o.t), placa: String(o.p || ''), id: String(o.i || ''), origem: 'admin', em: new Date().toISOString() };
+          S.nome = S.cad.nome;
+          localStorage.setItem(LS_CAD, JSON.stringify(S.cad)); localStorage.setItem(LS_NOME, S.nome);
+          var u = new URL(location.href); u.searchParams.delete('mb'); history.replaceState(null, '', u.pathname + (u.searchParams.toString() ? '?' + u.searchParams.toString() : '') + u.hash);
+        }
+      }
+    } catch (e) { console.warn('[motoboy] QR de acesso inválido:', e && e.message); }
+    try { var qn = (new URLSearchParams(location.search).get('nome') || '').trim(); if (qn && !S.cad) S.nome = qn; } catch (e) {}
     document.body.classList.add('cc-motoboy');
     montar(); render();
-    if (S.nome) iniciarGPS();
+    if (S.cad) { iniciarGPS(); if (!meus().length) setTimeout(abrirScan, 700); }
     clearInterval(S.timer); S.timer = setInterval(function () { render(); }, 20000);   /* puxa pedidos novos atribuídos */
     document.addEventListener('visibilitychange', function () { if (!document.hidden && S.watch != null && navigator.wakeLock) navigator.wakeLock.request('screen').then(function (w) { S.wake = w; }).catch(function () {}); });
   };
@@ -23296,6 +23344,161 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       '<script>window.onload=function(){setTimeout(function(){window.print()},250)}<\/script>');
     w.document.close();
   };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DELIVERY (ADMIN) — CADASTRO DE MOTOBOYS + QR DE ACESSO AO APP DE TRABALHO
+   O administrador cadastra o motoboy (nome, celular, identidade, placa, residência) na aba Delivery
+   e gera um QR: o motoboy escaneia com a câmera e o app dele (?role=motoboy) abre já reconhecido.
+   O QR leva só nome, celular e placa — identidade e residência ficam apenas neste aparelho do Admin.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var KEY = 'motoboysCadastro_v1', S = { aberto: false, edit: null, qr: null };
+  function $(i) { return document.getElementById(i); }
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function toastz(t) { if (typeof window.toast === 'function') window.toast(t); }
+  function lista() { try { var a = JSON.parse(localStorage.getItem('solbahia_' + KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  function gravar(a) { if (typeof salvar === 'function') salvar(KEY, a); else { try { localStorage.setItem('solbahia_' + KEY, JSON.stringify(a)); } catch (e) {} } }
+  function hoje() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function fmtData(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : ''; }
+  function fmtTel(t) { t = String(t || '').replace(/\D/g, ''); return t.length === 11 ? '(' + t.slice(0, 2) + ') ' + t.slice(2, 7) + '-' + t.slice(7) : t.length === 10 ? '(' + t.slice(0, 2) + ') ' + t.slice(2, 6) + '-' + t.slice(6) : t; }
+  function b64(o) { return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function linkDe(m) {
+    var base = (typeof window.ccOrigemSite === 'function') ? window.ccOrigemSite() : location.origin;
+    return base + '/?role=motoboy&mb=' + b64({ n: m.nome, t: m.telefone, p: m.placa, i: m.id });
+  }
+  function achar(id) { var a = lista(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
+
+  function formHtml(m) {
+    m = m || {};
+    var inp = 'width:100%;padding:10px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:.85rem;margin-top:6px;background:#fff';
+    var lab = 'display:flex;align-items:center;gap:8px;margin-top:10px;font-size:.8rem;font-weight:700;color:#374151';
+    return '<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:14px;padding:12px;margin-bottom:12px">' +
+      '<p style="font-weight:800;font-size:.85rem;color:#166534">' + (S.edit ? '✏️ Editar motoboy' : '➕ Novo motoboy') + '</p>' +
+      '<input id="mbx-nome" placeholder="Nome completo" value="' + esc(m.nome) + '" style="' + inp + '">' +
+      '<input id="mbx-tel" type="tel" inputmode="tel" placeholder="Celular com DDD" value="' + esc(fmtTel(m.telefone)) + '" style="' + inp + '">' +
+      '<input id="mbx-doc" placeholder="Identidade (RG ou CPF)" value="' + esc(m.documento) + '" style="' + inp + '">' +
+      '<input id="mbx-placa" placeholder="Placa da moto (ex.: ABC1D23)" maxlength="8" value="' + esc(m.placa) + '" style="' + inp + ';text-transform:uppercase">' +
+      '<input id="mbx-res" placeholder="Endereço de residência" value="' + esc(m.residencia) + '" style="' + inp + '">' +
+      '<p style="font-size:.68rem;color:#6b7280;margin-top:8px">Identidade e residência ficam só neste aparelho (não vão no QR nem no pedido).</p>' +
+      '<div style="display:flex;gap:8px;margin-top:10px"><button type="button" data-act="salvar" style="flex:1;padding:12px;border:0;border-radius:10px;background:#16a34a;color:#fff;font-weight:800">Salvar</button>' +
+      '<button type="button" data-act="cancelar" style="padding:12px 16px;border:0;border-radius:10px;background:#f3f4f6;color:#374151;font-weight:800">Cancelar</button></div></div>';
+  }
+
+  function qrHtml(m) {
+    var link = linkDe(m), img = '';
+    try { if (typeof window.ccQrPNGDataURL === 'function') img = window.ccQrPNGDataURL(link, 720, null, 4); } catch (e) { console.warn('[motoboys] QR:', e && e.message); }
+    return '<div style="background:#fff;border:2px solid #0369a1;border-radius:14px;padding:12px;margin-bottom:12px;text-align:center">' +
+      '<p style="font-weight:900;color:#0f2340">📲 QR de acesso — ' + esc(m.nome) + '</p>' +
+      (img ? '<img src="' + img + '" alt="QR de acesso" style="width:260px;max-width:100%;height:auto;margin:8px auto;display:block">' : '<p style="color:#b91c1c;font-size:.8rem">Não foi possível gerar o QR. Use o link abaixo.</p>') +
+      '<p style="font-size:.74rem;color:#374151">O motoboy abre a <b>câmera do celular</b> e escaneia. O app de trabalho abre já com o cadastro dele.</p>' +
+      '<input readonly value="' + esc(link) + '" style="width:100%;margin-top:8px;padding:8px;border:1px solid #e5e7eb;border-radius:8px;font-size:.66rem;color:#6b7280" onclick="this.select()">' +
+      '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">' +
+        '<button type="button" data-act="copiar" data-id="' + esc(m.id) + '" style="flex:1;padding:10px;border:0;border-radius:10px;background:#0369a1;color:#fff;font-weight:800;font-size:.8rem">📋 Copiar link</button>' +
+        '<button type="button" data-act="imprimir" data-id="' + esc(m.id) + '" style="flex:1;padding:10px;border:0;border-radius:10px;background:#7c3aed;color:#fff;font-weight:800;font-size:.8rem">🖨️ Imprimir</button>' +
+        '<button type="button" data-act="fechar" style="padding:10px 14px;border:0;border-radius:10px;background:#f3f4f6;color:#374151;font-weight:800;font-size:.8rem">Fechar</button></div></div>';
+  }
+
+  function desenhar() {
+    var host = $('dl-motoboys'); if (!host) return;
+    var a = lista(), btn = 'padding:8px 12px;border:0;border-radius:10px;font-weight:800;font-size:.74rem;';
+    var h = '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">' +
+      '<p class="font-bold text-sm uppercase tracking-widest text-orange-400">🛵 Motoboys — cadastro e acesso</p>' +
+      '<button type="button" data-act="novo" style="' + btn + 'background:#16a34a;color:#fff">➕ Cadastrar motoboy</button></div>';
+    if (S.aberto) h += formHtml(S.edit ? achar(S.edit) : null);
+    if (S.qr && achar(S.qr)) h += qrHtml(achar(S.qr));
+    if (!a.length) h += '<p style="text-align:center;color:#9ca3af;font-size:.78rem;padding:12px">Nenhum motoboy cadastrado ainda. Cadastre e gere o QR para ele abrir o app de trabalho.</p>';
+    a.forEach(function (m) {
+      h += '<div style="border-top:1px solid #f3f4f6;padding:10px 2px">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div>' +
+          '<b style="font-size:.9rem;color:#0f2340">' + esc(m.nome) + '</b>' +
+          '<div style="font-size:.74rem;color:#6b7280">📞 ' + esc(fmtTel(m.telefone)) + ' · 🏍️ ' + esc(m.placa) + '</div></div>' +
+          '<div style="display:flex;gap:6px;align-items:center">' +
+            '<button type="button" data-act="qr" data-id="' + esc(m.id) + '" style="' + btn + 'background:#0369a1;color:#fff">📲 QR de acesso</button>' +
+            '<button type="button" data-act="editar" data-id="' + esc(m.id) + '" style="' + btn + 'background:#f3f4f6;color:#374151">✏️</button>' +
+            '<button type="button" data-act="excluir" data-id="' + esc(m.id) + '" style="' + btn + 'background:#fee2e2;color:#b91c1c">🗑️</button></div></div>' +
+        '</div>';
+    });
+    host.innerHTML = h;
+  }
+
+  function salvarForm() {
+    var nome = $('mbx-nome').value.trim(), tel = $('mbx-tel').value.replace(/\D/g, ''), doc = $('mbx-doc').value.trim(),
+        placa = $('mbx-placa').value.replace(/[^A-Za-z0-9]/g, '').toUpperCase(), res = $('mbx-res').value.trim();
+    if (!nome) { toastz('Digite o nome do motoboy.'); return; }
+    if (tel.length < 10) { toastz('Digite o celular com DDD.'); return; }
+    if (!doc) { toastz('Digite a identidade (RG ou CPF).'); return; }
+    if (placa.length < 7) { toastz('Digite a placa da moto (7 caracteres).'); return; }
+    var a = lista(), antigo = S.edit ? achar(S.edit) : null;
+    var reg = {
+      id: antigo ? antigo.id : 'mb' + Date.now().toString(36), nome: nome, telefone: tel, documento: doc, placa: placa, residencia: res,
+      criado: antigo ? antigo.criado : new Date().toISOString()
+    };
+    var achou = false;
+    for (var i = 0; i < a.length; i++) if (a[i].id === reg.id) { a[i] = reg; achou = true; }
+    if (!achou) a.push(reg);
+    gravar(a); S.aberto = false; S.edit = null; S.qr = reg.id;   /* já mostra o QR para passar ao motoboy */
+    desenhar(); toastz('✅ Motoboy salvo. Mostre o QR a ele.');
+  }
+
+  function imprimir(m) {
+    var link = linkDe(m), img = (typeof window.ccQrPNGDataURL === 'function') ? window.ccQrPNGDataURL(link, 720, null, 4) : '';
+    var w = window.open('', '_blank'); if (!w) { toastz('Libere pop-ups para imprimir o QR.'); return; }
+    w.document.write('<!doctype html><meta charset="utf-8"><title>QR de acesso</title><body style="font-family:system-ui;text-align:center;margin:16px">' +
+      '<h2 style="margin:0">🛵 ' + esc(m.nome) + '</h2><p style="margin:4px 0;font-size:14px">Placa ' + esc(m.placa) + '</p>' +
+      '<img src="' + img + '" style="width:300px;height:300px"><p style="font-size:13px">Abra a câmera do celular e escaneie para abrir seu app de entregas.</p>' +
+      '<script>window.onload=function(){setTimeout(function(){window.print()},250)}<\/script>');
+    w.document.close();
+  }
+
+  document.addEventListener('click', function (ev) {
+    var b = ev.target.closest ? ev.target.closest('#dl-motoboys button[data-act]') : null; if (!b) return;
+    var act = b.getAttribute('data-act'), id = b.getAttribute('data-id'), m = id ? achar(id) : null;
+    if (act === 'novo') { S.aberto = true; S.edit = null; S.qr = null; desenhar(); }
+    else if (act === 'cancelar') { S.aberto = false; S.edit = null; desenhar(); }
+    else if (act === 'salvar') salvarForm();
+    else if (act === 'editar' && m) { S.aberto = true; S.edit = id; S.qr = null; desenhar(); }
+    else if (act === 'qr' && m) { S.qr = id; S.aberto = false; S.edit = null; desenhar(); }
+    else if (act === 'fechar') { S.qr = null; desenhar(); }
+    else if (act === 'copiar' && m) {
+      var l = linkDe(m);
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(l).then(function () { toastz('📋 Link copiado.'); }, function () { window.prompt('Copie o link:', l); });
+      else window.prompt('Copie o link:', l);
+    }
+    else if (act === 'imprimir' && m) imprimir(m);
+    else if (act === 'excluir' && m) {
+      if (!confirm('Excluir o cadastro de ' + m.nome + '? O QR dele deixa de ser gerado (o app já instalado no celular dele continua funcionando).')) return;
+      gravar(lista().filter(function (x) { return x.id !== id; })); if (S.qr === id) S.qr = null; desenhar();
+    }
+  });
+
+  window.ccDlRenderMotoboys = function () {
+    var lst = $('dl-lista'); if (!lst) return;
+    var host = $('dl-motoboys');
+    if (!host) {
+      host = document.createElement('div'); host.id = 'dl-motoboys'; host.className = 'admin-card mb-4';
+      var fil = $('dl-fil-todos'), ref = fil ? fil.parentElement : lst;
+      ref.parentNode.insertBefore(host, ref);
+    } else if (S.aberto) return;   /* não apaga o que o admin está digitando */
+    desenhar();
+  };
+
+  /* Entra junto com o desenho do financeiro da aba Delivery (renderDelivery já o chama) */
+  var _f = window.ccDlRenderFinanceiro;
+  if (typeof _f === 'function' && !_f.__mb) {
+    var w = function () { var r = _f.apply(this, arguments); try { window.ccDlRenderMotoboys(); } catch (e) { console.warn('[motoboys] card:', e); } return r; };
+    w.__mb = true; window.ccDlRenderFinanceiro = w;
+  }
+  /* Motoboys cadastrados aparecem na lista de "Nome do Motoboy" do pedido */
+  var _con = window.ccDlMotoboysConhecidos;
+  window.ccDlMotoboysConhecidos = function () {
+    var out = (typeof _con === 'function' ? _con() : []).slice(), set = {};
+    out.forEach(function (n) { set[String(n).toLowerCase()] = 1; });
+    lista().forEach(function (m) { if (m.nome && !set[m.nome.toLowerCase()]) { set[m.nome.toLowerCase()] = 1; out.push(m.nome); } });
+    return out;
+  };
+  try { window.ccDlRenderMotoboys(); } catch (e) {}
 })();
 </script>
 </body></html>
