@@ -26,7 +26,7 @@
     var j = function (k) { try { var v = localStorage.getItem('solbahia_' + k); return v === null ? null : JSON.parse(v); } catch (e) { return null; } };
     var r = null; try { r = localStorage.getItem('solbahia_sir_role'); } catch (e) {}
     var equipe = j('perfilAtendenteAtivo') === true || !!j('turnoAtivo') ||
-      ['atendente', 'gerente', 'dono', 'admin', 'caixa', 'cozinheiro', 'motoboy'].indexOf(r) >= 0;
+      ['atendente', 'gerente', 'dono', 'admin', 'caixa', 'cozinheiro', 'cozinha', 'balcao', 'motoboy'].indexOf(r) >= 0;
     var mesa = q.get('mesa'), mudou = false;
     var set = function (k, v) { if (q.get(k) !== v) { q.set(k, v); mudou = true; } };
     if (mesa || flag('cliente')) {
@@ -155,7 +155,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   if(!cli)return;
   var j=function(k){try{var v=localStorage.getItem('solbahia_'+k);return v===null?null:JSON.parse(v);}catch(e){return null;}};
   var r=null;try{r=localStorage.getItem('solbahia_sir_role');}catch(e){}
-  var equipe=j('perfilAtendenteAtivo')===true||!!j('turnoAtivo')||['atendente','gerente','dono','admin','caixa','cozinheiro','motoboy'].indexOf(r)>=0;
+  var equipe=j('perfilAtendenteAtivo')===true||!!j('turnoAtivo')||['atendente','gerente','dono','admin','caixa','cozinheiro','cozinha','balcao','motoboy'].indexOf(r)>=0;
   if(equipe)return;
   var st=document.createElement('style');
   st.id='cc-anti-flash-cliente-css';
@@ -319,7 +319,7 @@ window.COOKCONTROL_CONFIG = {
       if (j('perfilAtendenteAtivo') === true) return true;
       if (j('turnoAtivo')) return true;
       var r = localStorage.getItem('solbahia_sir_role');
-      return ['atendente', 'gerente', 'dono', 'admin', 'caixa', 'cozinheiro', 'motoboy'].indexOf(r) >= 0;
+      return ['atendente', 'gerente', 'dono', 'admin', 'caixa', 'cozinheiro', 'cozinha', 'balcao', 'motoboy'].indexOf(r) >= 0;
     } catch (e) { return false; }
   };
 
@@ -4572,14 +4572,6 @@ render();
       </button>
 </div>
 </div>
-<!-- ── SETORES (praças da cozinha) ── -->
-<div class="sw-wrap" style="margin-bottom: 0px; margin-top: 0px;"><div class="kds-sectors sw-inner" data-sw-done="1">
-<button class="kds-sector-btn on" onclick="setKdsSector(&#39;todos&#39;,this)">📋 Todos</button>
-<button class="kds-sector-btn" onclick="setKdsSector(&#39;fritura&#39;,this)">🍟 Fritura</button>
-<button class="kds-sector-btn" onclick="setKdsSector(&#39;grelhados&#39;,this)">🥩 Grelhados/Mar</button>
-<button class="kds-sector-btn" onclick="setKdsSector(&#39;bar&#39;,this)">🍺 Bar</button>
-<button class="kds-sector-btn" onclick="setKdsSector(&#39;montagem&#39;,this)">🍚 Montagem</button>
-</div><button class="sw-btn sw-l" aria-label="Rolar esquerda">‹</button><button class="sw-btn sw-r" aria-label="Rolar direita">›</button></div>
 <!-- ── GRADE DE PEDIDOS ── -->
 <div class="kds-grid" id="kds-cards-wrap"></div>
 <div class="kds-empty hidden" id="kds-empty-state">
@@ -6250,8 +6242,165 @@ const cozStatusCfg = {
 };
 
 // ─── COZINHA: RENDER ─────────────────────────────────────────────
+/* ── Bar × Cozinha: bebida SEMPRE sai primeiro, pelo Bar, direto; prato segue na fila da cozinha ── */
+let S_kds_setor = "todos";   // KDS: duas telas — Cozinha (pratos) e Bar / Balcão (bebidas). "todos" continua aceito em setKdsSector
+function ccEhBebida(it) {
+  try {
+    if(!it) return false;
+    if(it.cat === "bebidas" || it.categoria === "bebidas") return true;
+    const c = categorias.find(c => (c.itens || []).some(i => i.id === it.id));
+    return !!c && String(c.id) === "bebidas";
+  } catch(e) { return false; }
+}
+function setKdsSector(setor, btn) {
+  S_kds_setor = setor || "todos";
+  document.querySelectorAll(".kds-sector-btn").forEach(b => b.classList.remove("on"));
+  if(btn) btn.classList.add("on");
+  renderCozinha();
+}
+function ccKdsVisivel(p) {
+  const its = p.itens || [];
+  if(S_kds_setor === "bar")   return its.some(ccEhBebida) && !p.bar_entregue_em;      // Bar: só pedidos com bebida ainda não entregue
+  if(S_kds_setor === "todos") return true;                                             // Todos: tudo junto
+  return its.some(ccEhPrato);                                                          // cozinha: só pedidos que têm prato/petisco
+}
+/* Duas visões do KDS, por URL: ?role=cozinha → só pratos/petiscos | ?role=balcao (e Admin) → pedido completo */
+const CC_CATS_COZINHA = ["pratos", "petiscos", "sobremesas"];   // exigem preparo (sobremesa preparada inclusive); o resto é do Balcão
+// Sorvete/picolé COMERCIAL (pronto de freezer) é do Balcão mesmo estando em "sobremesas". Nome que COMEÇA com "sorvete" ou tem picolé/marca.
+// ("Petit gâteau com sorvete" é preparado: não casa, porque "sorvete" não está no início.)
+const CC_RE_COMERCIAL = /(^\s*sorvet)|picol|kibon|chicabon|magnum|cornetto|eskimo/i;
+function ccComercial(it) {
+  const c = ccCatDoItem(it);
+  return /sorvet|picol|gelad/i.test(c) || CC_RE_COMERCIAL.test(String((it && it.nome) || ""));
+}
+function ccKdsModo() {
+  try { const r = window.SirAccess && SirAccess.getRole && SirAccess.getRole(); return (r === "cozinha" || r === "cozinheiro") ? "cozinha" : "todos"; }
+  catch(e) { return "todos"; }
+}
+function ccCatDoItem(it) {
+  try { const c = categorias.find(c => (c.itens || []).some(i => i.id === it.id)); return c ? String(c.id) : String((it && (it.cat || it.categoria)) || ""); }
+  catch(e) { return ""; }
+}
+function ccEhPrato(it) { if(ccComercial(it)) return false; const c = ccCatDoItem(it); return c === "" || CC_CATS_COZINHA.indexOf(c) >= 0; }   // item sem categoria conhecida não se perde: vai para a cozinha
+function ccGrupoBalcao(it) {
+  const c = ccCatDoItem(it);
+  if(c === "bebidas") return "bebidas";
+  if(ccComercial(it)) return "sorvetes";
+  return "conveniencia";
+}
+function ccPratoPronto(ped, it) { return !!(it && it.pronto) || ped.status === "pronto" || ped.status === "entregue"; }
+function ccKdsTemNoModo(p) { return ccKdsModo() === "cozinha" ? (p.itens || []).some(ccEhPrato) : true; }
+function ccKdsAtualizaStatusPratos(ped) {
+  const pratos = (ped.itens || []).filter(ccEhPrato);
+  if(!pratos.length) return;
+  const todos = pratos.every(i => i.pronto), algum = pratos.some(i => i.pronto);
+  if(todos && (ped.status === "pendente" || ped.status === "preparo")) ped.status = "pronto";
+  else if(algum && ped.status === "pendente") ped.status = "preparo";
+}
+function ccKdsPratoPronto(id, idx) {
+  const ped = pedidosCozinha.find(p => p.id === id);
+  if(!ped || !ped.itens || !ped.itens[idx]) return;
+  const it = ped.itens[idx];
+  if(!it.pronto) { it.pronto = true; it.pronto_em = new Date().toISOString(); }
+  ccKdsAtualizaStatusPratos(ped);
+  salvar("pedidosCozinha_v1", pedidosCozinha);
+  renderCozinha();
+  toast("✅ " + it.nome + " PRONTO — " + (ped.numero ? "#" + ped.numero : "Mesa " + ped.mesa));
+}
+function ccKdsTodosProntos(id) {
+  const ped = pedidosCozinha.find(p => p.id === id);
+  if(!ped) return;
+  const agora = new Date().toISOString();
+  (ped.itens || []).forEach(i => { if(ccEhPrato(i) && !i.pronto) { i.pronto = true; i.pronto_em = agora; } });
+  ccKdsAtualizaStatusPratos(ped);
+  salvar("pedidosCozinha_v1", pedidosCozinha);
+  renderCozinha();
+  toast("✅ Pratos prontos — " + (ped.numero ? "#" + ped.numero : "Mesa " + ped.mesa));
+}
+function ccKdsItensHtml(ped) {
+  const its = (ped.itens || []).map((it, i) => ({ it, i }));
+  const row = (x, extra) => `<div class="kds-item" style="display:flex;align-items:center;gap:6px"><span class="kds-item-q">${x.it.q}×</span><span class="kds-item-n" style="flex:1">${x.it.nome}</span>${extra || ""}</div>`;
+  const tit = (t, cor) => `<div style="font-size:.62rem;font-weight:900;letter-spacing:.06em;color:${cor};margin:8px 0 2px">${t}</div>`;
+  const chip = (ok) => ok
+    ? `<span style="font-size:.62rem;font-weight:900;color:#4ade80;white-space:nowrap">✅ PRONTO</span>`
+    : `<span style="font-size:.62rem;font-weight:800;color:#fbbf24;white-space:nowrap">⏳ na cozinha</span>`;
+  const pratos = its.filter(x => ccEhPrato(x.it));
+  // ── COZINHA: só pratos e petiscos, cada um com o seu PRONTO ──
+  if(S_kds_setor === "cozinha") {
+    return pratos.map(x => row(x, ccPratoPronto(ped, x.it)
+      ? `<span style="font-size:.66rem;font-weight:900;color:#4ade80;white-space:nowrap">✅ PRONTO</span>`
+      : `<button class="kds-btn-acao kds-btn-pronto" style="padding:5px 10px;font-size:.68rem;flex:none" onclick="ccKdsPratoPronto('${ped.id}',${x.i})">✓ PRONTO</button>`)).join("");
+  }
+  // ── BALCÃO: pedido completo, agrupado ──
+  const dl = ccKdsEhDelivery(ped);
+  const grp = g => its.filter(x => !ccEhPrato(x.it) && ccGrupoBalcao(x.it) === g);
+  const bebs = grp("bebidas"), sorv = grp("sorvetes"), conv = grp("conveniencia");
+  const hora = ped.bar_entregue_em ? new Date(ped.bar_entregue_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}) : "";
+  const blocoBeb = bebs.length
+    ? tit(dl ? "🍺 BEBIDAS — SAEM JUNTO COM O PEDIDO" + (ped.bar_entregue_em ? " · ✅ pronta " + hora : "") : "🍺 BEBIDAS — ENTREGAR PRIMEIRO" + (ped.bar_entregue_em ? " · ✅ entregue às " + hora : ""), ped.bar_entregue_em ? "#4ade80" : "#fbbf24") + bebs.map(x => row(x)).join("")
+    : "";
+  const blocoCom = pratos.length ? tit("🍽️ COMIDAS — COZINHA", "#94a3b8") + pratos.map(x => row(x, chip(ccPratoPronto(ped, x.it)))).join("") : "";
+  const blocoSor = sorv.length ? tit("🍦 SORVETES / PICOLÉS", "#38bdf8") + sorv.map(x => row(x)).join("") : "";
+  const blocoCon = conv.length ? tit("🛍️ CONVENIÊNCIA / OUTROS", "#a78bfa") + conv.map(x => row(x)).join("") : "";
+  return dl ? blocoCom + blocoBeb + blocoSor + blocoCon : blocoBeb + blocoCom + blocoSor + blocoCon;
+}
+function ccKdsEhDelivery(ped) {
+  try { return String(ped.mesa).indexOf("Delivery") >= 0 || (typeof pedidosDelivery !== "undefined" && pedidosDelivery.some(d => d.id === ped.id)); }
+  catch(e) { return false; }
+}
+function ccKdsBotaoLiberar(ped) {
+  if(!ccKdsEhDelivery(ped)) return "";
+  const d = (typeof pedidosDelivery !== "undefined") ? pedidosDelivery.find(x => x.id === ped.id) : null;
+  if(!d) return "";
+  if(d.status === "saiu")   return `<span style="font-size:.7rem;font-weight:800;color:#38bdf8">🛵 NA RUA</span>`;
+  if(d.status === "pronto") return `<span style="font-size:.7rem;font-weight:800;color:#4ade80">📦 LIBERADO — aguardando o motoboy</span>`;
+  if(d.status === "entregue" || d.status === "cancelado") return "";
+  const faltam = (ped.itens || []).filter(i => ccEhPrato(i) && !ccPratoPronto(ped, i)).length;
+  return faltam
+    ? `<button class="kds-btn-acao" disabled style="opacity:.55;cursor:not-allowed">⏳ falta(m) ${faltam} prato(s) da cozinha</button>`
+    : `<button class="kds-btn-acao kds-btn-pronto" onclick="ccKdsLiberarDelivery('${ped.id}')">📦 LIBERAR PARA O MOTOBOY</button>`;
+}
+function ccKdsLiberarDelivery(id) {
+  const ped = pedidosCozinha.find(p => p.id === id);
+  if(!ped || ccKdsModo() === "cozinha") return;   // liberação final: só no Balcão
+  if(typeof avancarDelivery === "function") avancarDelivery(id, "pronto");
+  renderCozinha();
+}
+function ccKdsBotoesModo(ped, cfg) {
+  if(S_kds_setor === "cozinha") {
+    let h = "";
+    if(ped.status === "pendente") h += `<button class="kds-btn-acao kds-btn-pendente" onclick="avancarStatusCoz('${ped.id}')">▶ Iniciar Preparo</button>`;
+    if(ped.status !== "pronto" && ped.status !== "entregue" && (ped.itens || []).some(i => ccEhPrato(i) && !i.pronto))
+      h += `<button class="kds-btn-acao kds-btn-pronto" onclick="ccKdsTodosProntos('${ped.id}')">✅ TODOS OS PRATOS PRONTOS</button>`;
+    return h;
+  }
+  return ccKdsBotaoLiberar(ped)
+    + (cfg.proxLabel ? `<button class="kds-btn-acao kds-btn-${ped.status}" onclick="avancarStatusCoz('${ped.id}')">${cfg.proxLabel}</button>` : "")
+    + (ped.status !== "pendente" ? `<button class="kds-btn-voltar" onclick="voltarStatusCoz('${ped.id}')">↩</button>` : "")
+    + (ped.status === "pronto" ? `<button class="kds-btn-cobrar" onclick="abrirMaquininha('${ped.id}')">💳 Cobrar</button>` : "");
+}
+function ccKdsBotaoBar(ped) {
+  if(S_kds_setor !== "bar" && S_kds_setor !== "todos") return "";
+  if(!(ped.itens || []).some(ccEhBebida) || ped.bar_entregue_em) return "";
+  const dl = ccKdsEhDelivery(ped);
+  return `<button class="kds-btn-acao kds-btn-pronto" onclick="entregarBebidaCoz('${ped.id}')">${dl ? "🍺 BEBIDA PRONTA (SAI COM O PEDIDO)" : "🍺 BEBIDA ENTREGUE"}</button>`;
+}
+function entregarBebidaCoz(id) {
+  const ped = pedidosCozinha.find(p => p.id === id);
+  if(!ped) return;
+  const _dl = ccKdsEhDelivery(ped);
+  if(!ped.bar_entregue_em) { ped.bar_entregue_em = new Date().toISOString(); ped.bar_status = _dl ? "pronta" : "entregue"; }   // delivery: bebida pronta no balcão, sai junto com o pedido
+  const semPrato = !(ped.itens || []).some(i => !ccEhBebida(i));
+  if(semPrato && (ped.status === "pendente" || ped.status === "preparo")) ped.status = "pronto";   // pedido só de bebida: segue o fluxo normal (cobrar/entregar)
+  salvar("pedidosCozinha_v1", pedidosCozinha);
+  renderCozinha();
+  toast(_dl ? "🍺 Bebida pronta — sai junto com o pedido (entrega completa)" : "🍺 Bebida entregue — " + (ped.numero ? "#" + ped.numero : "Mesa " + ped.mesa));
+  if(S.viewAtual === "atendente" && typeof renderAtendente === "function") renderAtendente();
+}
+
 function renderCozinha() {
   if(!document.getElementById("kds-cards-wrap")) return;
+  S_kds_setor = ccKdsModo();   // cozinha (só pratos) ou balcão/admin (pedido completo)
 
   const agora = new Date();
   const reloj = document.getElementById("kds-reloj");
@@ -6259,18 +6408,19 @@ function renderCozinha() {
   const dataLbl = document.getElementById("kds-data-label");
   if(dataLbl) dataLbl.textContent = agora.toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"});
   const _e = id => document.getElementById(id);
-  const pend = pedidosCozinha.filter(p=>p.status==="pendente").length;
-  const prep = pedidosCozinha.filter(p=>p.status==="preparo").length;
-  const prnt = pedidosCozinha.filter(p=>p.status==="pronto").length;
+  const pend = pedidosCozinha.filter(p=>p.status==="pendente" && ccKdsTemNoModo(p)).length;
+  const prep = pedidosCozinha.filter(p=>p.status==="preparo" && ccKdsTemNoModo(p)).length;
+  const prnt = pedidosCozinha.filter(p=>p.status==="pronto" && ccKdsTemNoModo(p)).length;
   if(_e("kds-cnt-pend")) _e("kds-cnt-pend").textContent = pend+" Aguardando";
   if(_e("kds-cnt-prep")) _e("kds-cnt-prep").textContent = prep+" Preparo";
   if(_e("kds-cnt-prnt")) _e("kds-cnt-prnt").textContent = prnt+" Prontos";
 
-  const lista = (S_coz_filtro==="todos"
+  const lista = (S_coz_filtro==="todos" || S_kds_setor==="bar"
     ? pedidosCozinha.filter(p=>p.status!=="entregue")
     : pedidosCozinha.filter(p=>p.status===S_coz_filtro))
     .slice()
-    .sort((a,b) => new Date(a.data).getTime() - new Date(b.data).getTime());
+    .sort((a,b) => new Date(a.data).getTime() - new Date(b.data).getTime())
+    .filter(ccKdsVisivel);
   const grid  = document.getElementById("kds-cards-wrap");
   const empty = document.getElementById("kds-empty-state");
   if(!grid) return;
@@ -6324,6 +6474,7 @@ function renderCozinha() {
     const card = document.createElement("div");
     const stCls = ped.status==="pendente"?"st-pendente":ped.status==="preparo"?"st-preparo":"st-pronto";
     card.className = "kds-card " + stCls + (urgente?" urgente":"");
+    card.dataset.pedidoId = ped.id;   // id correto na criação (o wrapper antigo atribuía pela posição na lista e errava com filtro/ordem)
     card.innerHTML = `
       <div class="kds-card-head">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -6337,13 +6488,12 @@ function renderCozinha() {
         </div>
       </div>
       <div class="kds-card-itens">
-        ${ped.itens.map(it=>`<div class="kds-item"><span class="kds-item-q">${it.q}×</span><span class="kds-item-n">${it.nome}</span></div>`).join("")}
+        ${ccKdsItensHtml(ped)}
         ${ped.obs?`<div class="kds-obs">📝 ${ped.obs}</div>`:""}
       </div>
       <div class="kds-card-actions">
-        ${cfg.proxLabel?`<button class="kds-btn-acao kds-btn-${ped.status}" onclick="avancarStatusCoz('${ped.id}')">${cfg.proxLabel}</button>`:""}
-        ${ped.status!=="pendente"?`<button class="kds-btn-voltar" onclick="voltarStatusCoz('${ped.id}')">↩</button>`:""}
-        ${ped.status==="pronto"?`<button class="kds-btn-cobrar" onclick="abrirMaquininha('${ped.id}')">💳 Cobrar</button>`:""}
+        ${ccKdsBotaoBar(ped)}
+        ${ccKdsBotoesModo(ped, cfg)}
       </div>`;
     grid.appendChild(card);
   });
@@ -8094,6 +8244,18 @@ const SirAccess = (function() {
       default: 'cozinha',
       readonly: ['cardapio','estoque2'], // só leitura
     },
+    // Cozinha (?role=cozinha): tela exclusiva do cozinheiro — SÓ pratos e petiscos, sem bebida/sorvete/conveniência
+    cozinha: {
+      label: '👨‍🍳 Cozinha', cor: '#ea580c', bg: '#fff7ed',
+      views: ['cozinha'],
+      default: 'cozinha',
+    },
+    // Balcão (?role=balcao): pedido COMPLETO, monta a sacola do delivery e libera para o motoboy
+    balcao: {
+      label: '🧾 Balcão', cor: '#0369a1', bg: '#f0f9ff',
+      views: ['cozinha','delivery'],
+      default: 'cozinha',
+    },
     // Delivery: entregas
     motoboy: {
       label: '🛵 Delivery', cor: '#16a34a', bg: '#f0fdf4',
@@ -9760,7 +9922,10 @@ async function confirmarDelivery(editId) {
   // clique em "Confirmar Pedido" (só roda em link de delivery limpo,
   // ver ccCapturarGeoDelivery). Nunca bloqueia o pedido se o
   // navegador negar ou não suportar geolocalização.
-  const geoDelivery = await ccCapturarGeoDelivery();
+  // Equipe lançando o pedido no Admin NÃO captura o GPS do próprio aparelho (não é a posição do cliente);
+  // a localização vem do link/coordenada colada do WhatsApp. Cliente pedindo de casa continua capturando.
+  const _roleDl = (window.SirAccess && typeof window.SirAccess.getRole === "function") ? window.SirAccess.getRole() : null;
+  const geoDelivery = ["admin","atendente","dono","gerente","caixa"].includes(_roleDl) ? null : await ccCapturarGeoDelivery();
 
   const pagAtivo = document.querySelector("#dl-pag-opts .popt.on");
   const _semContato = !!((document.getElementById("dl-sem-contato") || {}).checked);
@@ -12838,6 +13003,7 @@ renderCozinha = function() {
   document.querySelectorAll(".kds-card").forEach(card => {
     const actions = card.querySelector(".kds-card-actions");
     if(!actions || actions.querySelector(".kds-btn-cancelar")) return;
+    if(typeof ccKdsModo === "function" && ccKdsModo() === "cozinha") return;   // cozinheiro só produz: sem cancelar/adicionar
     const pedId = card.dataset.pedidoId || "";
 
     // Botão cancelar
@@ -12868,7 +13034,7 @@ renderCozinha = function() {
   const cards = grid.querySelectorAll(".kds-card");
   const lista = pedidosCozinha.filter(p=>p.status!=="entregue");
   cards.forEach((card, idx) => {
-    if(lista[idx]) card.dataset.pedidoId = lista[idx].id;
+    if(!card.dataset.pedidoId && lista[idx]) card.dataset.pedidoId = lista[idx].id;
   });
 };
 
@@ -22117,11 +22283,15 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       if ((RANK[r.status] || 0) > (RANK[l.status] || 0)) l.status = r.status;
       if (r.entregueEm && !l.entregueEm) l.entregueEm = r.entregueEm;
       if (r.pago && !l.pago) { l.pago = true; l.pagoEm = r.pagoEm; }
+      /* KDS Balcão/Cozinha: prato pronto (por item) e bebida liberada pelo Balcão — só avançam, nunca voltam */
+      if (Array.isArray(r.itens) && Array.isArray(l.itens)) r.itens.forEach(function (ri, i) { var li = l.itens[i]; if (ri && li && ri.id === li.id && ri.pronto && !li.pronto) { li.pronto = true; li.pronto_em = ri.pronto_em; } });
+      if (r.bar_entregue_em && !l.bar_entregue_em) { l.bar_entregue_em = r.bar_entregue_em; l.bar_status = r.bar_status; }
     });
     return Array.from(out.values()).sort(function (a, b) { return ts(b) - ts(a); });
   }
 
-  function assinatura(arr) { return (arr || []).map(function (p) { return p.id + ":" + p.status; }).join("|"); }
+  function pts(p) { return ((p && p.itens) || []).reduce(function (a, i) { return a + (i && i.pronto ? 1 : 0); }, 0) + (p && p.bar_entregue_em ? 1 : 0); }
+  function assinatura(arr) { return (arr || []).map(function (p) { return p.id + ":" + p.status + ":" + pts(p); }).join("|"); }
 
   function aplicarLocal(merged) {
     if (typeof pedidosCozinha === "undefined") return;
@@ -22168,7 +22338,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       if (assinatura(merged) !== antes) { aplicarLocal(merged); redesenhar(); }
       // auto-cura: se este aparelho tem algo que a nuvem não tem (ou status mais avançado), reenvia a união
       var rm = new Map(remoto.map(function (p) { return [p.id, p]; }));
-      var defasada = merged.some(function (p) { var q = rm.get(p.id); return !q || (RANK[q.status] || 0) < (RANK[p.status] || 0); });
+      var defasada = merged.some(function (p) { var q = rm.get(p.id); return !q || (RANK[q.status] || 0) < (RANK[p.status] || 0) || pts(p) > pts(q); });
       if (defasada) {
         await sb.from(tabela()).upsert({ chave: chaveNs(), dados: merged, atualizado_em: new Date().toISOString() }, { onConflict: "chave" });
       }
@@ -22177,6 +22347,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     } finally { _puxando = false; }
   }
   window.ccSincronizarPedidosNuvem = puxar;
+  window.ccMesclarPedidosCozinha = mesclar;
 
   function ligarCanal() {
     var sb = cliente(); if (!sb || _canal) return;
@@ -22870,6 +23041,17 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     });
   }
   /* Lido o ID: dá OK sozinho → NA RUA + vincula ao motoboy + abre a lista de entregas dele */
+  function alertaBebida(ok) {
+    var o = document.createElement('div'); o.id = 'mb-alerta-bebida';
+    o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;padding:16px';
+    o.innerHTML = '<div style="background:#fff;border-radius:18px;padding:18px;max-width:340px;width:100%;text-align:center;border:4px solid #f59e0b">' +
+      '<div style="font-weight:900;color:#92400e;font-size:1.1rem;line-height:1.4">⚠️ ATENÇÃO: Confirme visualmente se a BEBIDA já foi colocada na sacola antes de sair!</div>' +
+      '<button type="button" id="mb-alerta-ok" style="margin-top:16px;width:100%;padding:16px;border:0;border-radius:14px;background:#16a34a;color:#fff;font-weight:900;font-size:1rem">✅ CONFIRMEI — SAIR AGORA</button>' +
+      '<button type="button" id="mb-alerta-x" style="margin-top:8px;width:100%;padding:12px;border:0;border-radius:12px;background:#f3f4f6;color:#374151;font-weight:800">Voltar</button></div>';
+    document.body.appendChild(o);
+    $('mb-alerta-ok').onclick = function () { o.remove(); ok(); };
+    $('mb-alerta-x').onclick = function () { o.remove(); };
+  }
   function processarCodigo(txt) {
     var id = String(txt || '').trim(); if (!id) return;
     var lista = ped(), p = lista.filter(function (x) { return x.id === id; })[0];
@@ -22879,6 +23061,16 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (p.status === 'saiu' && p.motoboy && norm(p.motoboy) !== norm(S.nome)) { toastz('⚠️ Este pedido já saiu com ' + p.motoboy + '.'); return; }
     if (p.status === 'recebido' || p.status === 'preparo') { toastz('⏳ Pedido ainda em preparo — só sai quando estiver PRONTO.'); return; }
     if (p.sem_contato && !p.pagamento_confirmado_em) { toastz('💸 Pedido SEM CONTATO ainda sem Pix confirmado. Fale com o Caixa.'); return; }
+    var _bebPend = false;
+    try {   /* bebida pendente no Bar NÃO bloqueia: o motoboy confirma visualmente na sacola e sai */
+      var kz = (typeof pedidosCozinha !== 'undefined' ? pedidosCozinha : []).filter(function (x) { return x.id === p.id; })[0];
+      _bebPend = !!(typeof ccEhBebida === 'function' && (p.itens || []).some(ccEhBebida) && !(kz && kz.bar_entregue_em));
+    } catch (e) {}
+    if (_bebPend) { alertaBebida(function () { retirar(p.id); }); return; }
+    retirar(p.id);
+  }
+  function retirar(id) {
+    var p = ped().filter(function (x) { return x.id === id; })[0]; if (!p) return;
     p.motoboy = S.nome; if (S.cad) { p.motoboy_telefone = S.cad.telefone; if (S.cad.placa) p.motoboy_placa = S.cad.placa; }
     try {
       if (p.status !== 'saiu' && typeof avancarDelivery === 'function') avancarDelivery(p.id, 'saiu');
@@ -23088,6 +23280,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (typeof window.toast === 'function') window.toast('✅ Recebimento confirmado.');
   };
   window.ccDlRenderFinanceiro = function () {
+    try { var _rf = window.SirAccess && SirAccess.getRole && SirAccess.getRole(); if (_rf === 'balcao' || _rf === 'cozinha') { var _hf = document.getElementById('dl-financeiro'); if (_hf) _hf.remove(); return; } } catch (e) {}
     var lst = document.getElementById('dl-lista'); if (!lst) return;
     var host = document.getElementById('dl-financeiro');
     if (!host) {
@@ -23563,6 +23756,12 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
   /* Extras no card do Admin: sem contato (Pix antecipado), foto da entrega e pendência de conferência */
   window.ccDlBotoesExtra = function (p) {
     var h = '', bt = 'border:none;border-radius:8px;color:#fff;padding:7px 12px;font-size:.72rem;font-weight:700;cursor:pointer;text-decoration:none;';
+    try {
+      var kz = (typeof pedidosCozinha !== 'undefined' ? pedidosCozinha : []).filter(function (x) { return x.id === p.id; })[0];
+      if (typeof ccEhBebida === 'function' && (p.itens || []).some(ccEhBebida) && p.status !== 'entregue' && p.status !== 'cancelado')
+        h += '<div style="flex-basis:100%;font-size:.74rem;font-weight:800;color:' + (kz && kz.bar_entregue_em ? '#166534' : '#b45309') + '">🍺 Bebida: ' +
+          (kz && kz.bar_entregue_em ? '✅ pronta no balcão às ' + new Date(kz.bar_entregue_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + ' — sai junto com o pedido' : '⏳ o Bar ainda não marcou — o motoboy confere a bebida na sacola ao retirar') + '</div>';
+    } catch (e) {}
     if (p.sem_contato) {
       h += '<div style="flex-basis:100%;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:10px;padding:8px 10px;font-size:.74rem;color:#92400e;font-weight:700">📦 SEM CONTATO — deixar: ' +
         esc(p.instrucoes_entrega || '(sem instrução)') + ' · ' + (p.pagamento_confirmado_em ? '✅ Pix antecipado confirmado' : '⚠️ Pix antecipado PENDENTE') + '</div>';
