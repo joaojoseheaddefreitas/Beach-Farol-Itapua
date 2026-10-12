@@ -13402,6 +13402,8 @@ window._injetarPainelQR = function() {
   else adminEl.prepend(panel);
 
   _renderQRCards2(configs3, urls);
+  // Painel de calibração (inclui o botão ZERAR MAPA DE LOCALIZAÇÃO): o override acima substituiu o original, que era quem o montava.
+  try { if (typeof _injetarPainelCalibracaoMesas === "function") _injetarPainelCalibracaoMesas(); } catch (e) { console.warn("[Calibração] painel no admin:", e && e.message); }
 };
 
 function _renderQRCards2(confs, urls) {
