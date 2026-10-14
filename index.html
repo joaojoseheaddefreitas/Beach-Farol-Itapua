@@ -1,5 +1,53 @@
 <!DOCTYPE html>
 <html lang="pt-BR"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<script id="cc-restaurar-sessao-tap">
+/* Tap to Pay: ao voltar do app da InfinitePay o navegador pode abrir a página "do zero" e perder nome/turno do garçom.
+   Este bloco roda ANTES de qualquer outro script e devolve só o que SUMIU (nunca sobrescreve o que já existe).
+   Só age quando a página abriu com ?tap_result= (volta do Tap). Não restaura "cc_ativacao_fresca" de propósito
+   (ela dispararia um "novo escaneamento" e zeraria a hora de entrada). */
+window.CC_SESSAO_LOCAL = ["solbahia_turnoAtivo", "solbahia_perfilAtendenteAtivo", "solbahia_horaEntradaTravada",
+                          "solbahia_empresa_id", "solbahia_empresa_id_qr", "solbahia_turno_carimbo",
+                          "solbahia_sir_role", "cc_motoboy_cadastro", "cc_motoboy_nome"];
+window.CC_SESSAO_ABA = ["cc_turno_carimbo"];
+(function () {
+  try {
+    var snap = JSON.parse(localStorage.getItem("cc_tap_sessao_backup") || "null");
+    if (!snap) return;
+    var voltouDoTap = /[?&]tap_result=/.test(location.search);
+    if (!voltouDoTap || Date.now() - snap.t > 15 * 60 * 1000) {
+      if (Date.now() - snap.t > 15 * 60 * 1000) localStorage.removeItem("cc_tap_sessao_backup");
+      return;
+    }
+    Object.keys(snap.local || {}).forEach(function (k) { if (localStorage.getItem(k) === null) localStorage.setItem(k, snap.local[k]); });
+    Object.keys(snap.aba || {}).forEach(function (k) { if (sessionStorage.getItem(k) === null) sessionStorage.setItem(k, snap.aba[k]); });
+  } catch (e) {}
+})();
+</script>
+<script id="cc-mesa-paga-tap">
+/* Mesa PAGA no Tap (InfinitePay): guarda "fim do atendimento" por mesa. A mesa NÃO muda para Livre — só o atendente/caixa libera.
+   O aviso "paga" some sozinho quando: a mesa é liberada, entra consumo novo a pagar, ou passam 12 h. */
+window.ccMesasPagasTap = (function () { try { return JSON.parse(localStorage.getItem("solbahia_mesasPagasTap") || "{}") || {}; } catch (e) { return {}; } })();
+window.ccMarcarMesaPagaTap = function (n, info) {
+  n = Number(n); if (!n || !isFinite(n)) return;
+  window.ccMesasPagasTap[n] = info;
+  try { localStorage.setItem("solbahia_mesasPagasTap", JSON.stringify(window.ccMesasPagasTap)); } catch (e) {}
+};
+window.ccPagaTapDaMesa = function (n) {
+  try {
+    n = Number(n); var info = window.ccMesasPagasTap[n]; if (!info) return null;
+    var apagar = function () { delete window.ccMesasPagasTap[n]; try { localStorage.setItem("solbahia_mesasPagasTap", JSON.stringify(window.ccMesasPagasTap)); } catch (e) {} return null; };
+    var t = new Date(info.em).getTime();
+    if (!isFinite(t) || Date.now() - t > 12 * 3600 * 1000) return apagar();
+    var peds = (typeof pedidosCozinha !== "undefined" ? pedidosCozinha : []).filter(function (x) { return Number(x.mesa) === n && x.status !== "entregue"; });
+    var st = (typeof mesaStatus !== "undefined" && mesaStatus[n]) || "livre";
+    if (st === "livre" && !peds.length) return apagar();                         // mesa liberada
+    var ini = (typeof mesaSessaoInicio !== "undefined" && mesaSessaoInicio[n]) ? new Date(mesaSessaoInicio[n]).getTime() : 0;
+    if (ini && t < ini) return apagar();                                          // aviso de um cliente anterior
+    if (peds.some(function (x) { return !x.pago; })) return null;                 // consumo novo a pagar: não está mais "paga"
+    return info;
+  } catch (e) { return null; }
+};
+</script>
 <script id="cc-repassa-url-do-qr">
 /* O QR abre https://SITE/?role=cliente&mesa=N na página de FORA. Se o app roda dentro de um <iframe src="/app/index.html">
    (casca React/Lovable), o iframe nasce SEM esses parâmetros e abre como Proprietário. Aqui o iframe copia a query e o #hash
@@ -266,7 +314,9 @@ window.COOKCONTROL_CONFIG = {
   // Módulo de Pagamentos (maquininhas) — identificador único deste restaurante
   // e endereço do backend que fala com as adquirentes.
   empresaId: "beach-farol-itapua", // ID padrão e obrigatório deste estabelecimento
-  paymentsApiBase: "https://cookcontrol-pagamentos.vercel.app/api/v1"
+  paymentsApiBase: "https://cookcontrol-pagamentos.vercel.app/api/v1",
+  // InfiniteTag da InfinitePay (sem o $). Usada só no Tap to Pay do garçom, para não cobrar na conta errada.
+  infinitepayHandle: "SUA_INFINITETAG_SEM_$"
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3177,21 +3227,6 @@ async function ccClientePagarPix() {
   }
 }
 
-function ccEscutarPagamentoCliente(orderId, empresaId, mesa, valorPago) {
-  const sb = ccGetSupabaseClient();
-  const canal = sb
-    .channel(`cliente-pgto-${orderId}`)
-    .on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "cobrancas_mesa", filter: `order_id=eq.${orderId}` },
-      (payload) => {
-        if (payload.new.status !== "pago_confirmado") return;
-        ccFecharContaCliente(mesa, valorPago);
-        sb.removeChannel(canal);
-      }
-    )
-    .subscribe();
-}
 
 // Limpa a sessão do celular do cliente e libera a mesa pro atendente —
 // a tela do atendente atualiza sozinha (já está ouvindo a tabela "mesas").
@@ -4770,10 +4805,12 @@ render();
 </div>
 <!-- ═══ TAB: AUTOMÁTICO (cobrança real via API — Mercado Pago) ═══ -->
 <div class="hidden" id="maq-tab-automatico">
-<p class="text-xs text-gray-500 mb-3">Cobra direto pela API do Mercado Pago. A mesa só libera quando o pagamento for confirmado de verdade pelo backend — não é preciso apertar nenhum botão de "confirmar".</p>
+<p class="text-xs text-gray-500 mb-3">Pix e Cartão (API): cobrança pelo Mercado Pago — a mesa só libera quando o backend confirma de verdade, sem apertar "confirmar". Crédito/Débito (Tap): aproximação do cartão no próprio celular pela InfinitePay — a mesa é baixada quando o app da InfinitePay devolve a aprovação.</p>
 <div class="grid grid-cols-2 gap-2 mb-4">
 <button class="btn-primary py-3 text-sm" onclick="ccCobrarNoCelular(&#39;pix&#39;)" style="background:linear-gradient(135deg,#16a34a,#15803d)">💸 Pix (API)</button>
 <button class="btn-primary py-3 text-sm" onclick="ccCobrarNoCelular(&#39;cartao&#39;)" style="background:linear-gradient(135deg,#2563eb,#1d4ed8)">💳 Cartão (API)</button>
+<button class="btn-primary py-3 text-sm" onclick="ccCobrarTapInfinitePay('credit',1)" style="background:linear-gradient(135deg,#7c3aed,#5b21b6)">📲 Crédito (Tap)</button>
+<button class="btn-primary py-3 text-sm" onclick="ccCobrarTapInfinitePay('debit',1)" style="background:linear-gradient(135deg,#0891b2,#0e7490)">📲 Débito (Tap)</button>
 </div>
 <div class="text-center text-xs text-gray-400 mb-4" id="cc-celular-status"></div>
 <div class="border-t pt-3 mt-1">
@@ -6668,6 +6705,7 @@ function _ccInjetarEstiloMapaMesas() {
   .cc-puck.xs.sel small{display:block;position:absolute;top:100%;left:50%;transform:translateX(-50%);background:#0f2340;color:#fff;padding:1px 5px;border-radius:6px;font-size:.55rem;white-space:nowrap}
   .cc-canvas.g{aspect-ratio:3/4;max-height:none}
   .cc-puck.sel{outline:4px solid #0ea5e9;z-index:5}
+  .cc-canvas .cc-puck.cc-paga::after{content:"💳";position:absolute;top:-9px;right:-9px;font-size:15px;line-height:1;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
   .cc-p-livre{background:#dcfce7;border-color:#16a34a}.cc-p-ocupada{border-color:#ea580c;background:#ffedd5}.cc-p-conta{border-color:#dc2626;background:#fee2e2}
   .cc-p-pedido{border-color:#dc2626;animation:ccBlinkRed .8s infinite}.cc-p-campainha{border-color:#f59e0b;animation:ccBlinkYellow .8s infinite}
   @keyframes ccBlinkRed{0%,100%{background:#fff;box-shadow:0 0 0 0 rgba(220,38,38,0)}50%{background:#ef4444;color:#fff;box-shadow:0 0 0 10px rgba(220,38,38,.45)}}
@@ -7045,7 +7083,7 @@ function _ccMontarMapaMesasHTML() {
   let tray = "";
   semPos.forEach(e => {
     const rot = e.g.length > 1 ? e.g.map(pad).join("+") : pad(e.p);
-    tray += `<div class="cc-puck ${_ccPuckCls(e)}${_ccMapaSel === e.p ? " sel" : ""}" onclick="ccMapaTap(${e.p})" title="Mesa ${rot} — sem posição no mapa">${rot}<small>${e.conta ? "conta" : e.ativa ? "ocupada" : "livre"}</small></div>`;
+    tray += `<div class="cc-puck ${_ccPuckCls(e)}${_ccMapaSel === e.p ? " sel" : ""}" onclick="ccMapaTap(${e.p})" title="Mesa ${rot} — sem posição no mapa">${rot}<small>${e.conta ? "conta" : e.ativa ? (window.ccPagaTapDaMesa && window.ccPagaTapDaMesa(e.p) ? "💳 paga" : "ocupada") : "livre"}</small></div>`;
   });
   if (tray) tray = `<div class="cc-tray"><div class="cc-coms-h">📍 Sem posição no mapa (${semPos.length}) — escaneie o QR da mesa para posicioná-la</div><div class="cc-tray-grid">${tray}</div></div>`;
 
@@ -7079,6 +7117,7 @@ function _ccMontarMapaMesasHTML() {
     }
     if (mapaGeoOverride[sel.p]) b.push(`<button class="l" onclick="ccMapaLimparPos(${sel.p})">↺ Posição do GPS</button>`);
     folha = `<div class="cc-folha"><h5>Mesa ${rot}${sel.total ? ` · ${fmtBRL(sel.total)}` : ""}${desde ? ` · <span class="cc-timer" data-inicio="${new Date(desde).toISOString()}" data-parado="0">⏱ 00:00</span>` : ""}</h5>
+      ${(() => { const pg = window.ccPagaTapDaMesa && window.ccPagaTapDaMesa(sel.p); return pg ? `<p style="background:#dcfce7;border:1.5px solid #16a34a;color:#166534;border-radius:10px;padding:8px 10px;font-weight:800">💳 PAGA no Tap${pg.bandeira ? " (" + _ccEsc(pg.bandeira) + ")" : ""} · ${fmtBRL(Number(pg.valor) || 0)} · atendimento encerrado às ${new Date(pg.em).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}<br><span style="font-weight:600">Mesa segue OCUPADA — toque em Liberar Mesa quando o cliente sair e a mesa estiver arrumada.</span></p>` : ""; })()}
       ${sel.peds.length ? `<p>👥 <b>${sel.peds.length} pedido(s) nesta mesa:</b><br>${sel.peds.map(x => `${x.numero ? "#" + _ccEsc(x.numero) + " " : ""}${x.nome ? _ccEsc(x.nome) + " " : ""}· ${fmtBRL(Number(x.total) || 0)} · ${_ccEsc(x.status)} <button class="c" style="padding:3px 8px;font-size:.66rem" onclick="abrirMaquininha('${_ccEsc(x.id)}')">💳 Cobrar este</button>`).join("<br>")}</p>` : ""}${itens ? `<p>🍽️ ${itens}</p>` : ""}${gpsTxt}<div class="cc-btns">${b.join("")}</div></div>`;
   }
 
@@ -7233,7 +7272,7 @@ function ccMapaAcao(tipo, p) {
 // Cor do círculo = situação da mesa, igual em qualquer lugar: 🟢 livre · 🟠 ocupada · 🔴 conta.
 // Alerta operacional NÃO troca a cor-base: vira anel pulsante + selo (🔔 campainha · 🧾 pedido novo · 🍳 preparo · ✅ pronto).
 function _ccPuckCls(e) {
-  const base = e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre";
+  const base = (e.conta ? "cc-p-conta" : e.ativa ? "cc-p-ocupada" : "cc-p-livre") + (window.ccPagaTapDaMesa && window.ccPagaTapDaMesa(e.p) ? " cc-paga" : "");
   const ov = e.camp ? " ov-camp" : e.novo ? " ov-novo" : e.pronto ? " ov-pronto" : e.prep ? " ov-prep" : "";
   return base + ov;
 }
@@ -14257,6 +14296,273 @@ function ccGetSupabaseClient() {
   return _ccClienteSb;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   ESCUTA REALTIME UNIFICADA (Mercado Pago + InfinitePay)
+   Tudo passa pela tabela cobrancas_mesa (supabase-cobrancas_mesa.sql). Para cada cobrança: Realtime +
+   checagem ao conectar + checagem a cada 6 s + checagem ao voltar pro navegador (celular dormiu / foi ao app do banco).
+   ═══════════════════════════════════════════════════════════════ */
+function ccAguardarCobranca(orderId, aoConfirmar) {
+  const sb = ccGetSupabaseClient();
+  let fim = false, canal = null, poll = null, limite = null;
+
+  const parar = () => {
+    fim = true;
+    clearInterval(poll); clearTimeout(limite);
+    document.removeEventListener("visibilitychange", aoVoltar);
+    if (canal) { try { sb.removeChannel(canal); } catch (e) {} canal = null; }
+  };
+  const confirmar = (linha) => {
+    if (fim) return;
+    parar();
+    Promise.resolve().then(() => aoConfirmar(linha || {})).catch(e => console.warn("[cobrança]", e));
+  };
+  const verificar = async () => {
+    if (fim) return;
+    try {
+      const { data } = await sb.from("cobrancas_mesa").select("status,tipo_pagamento,recibo_url").eq("order_id", orderId).maybeSingle();
+      if (data && data.status === "pago_confirmado") confirmar(data);
+    } catch (e) { /* sem rede agora: tenta de novo no próximo ciclo */ }
+  };
+  const aoVoltar = () => { if (!document.hidden) verificar(); };
+
+  canal = sb.channel(`cobranca-${orderId}`)
+    .on("postgres_changes",
+      { event: "UPDATE", schema: "public", table: "cobrancas_mesa", filter: `order_id=eq.${orderId}` },
+      (p) => { if (p.new && p.new.status === "pago_confirmado") confirmar(p.new); })
+    .subscribe((estado) => { if (estado === "SUBSCRIBED") verificar(); });   // cobre pagamento feito ANTES do canal abrir
+
+  poll = setInterval(verificar, 6000);
+  document.addEventListener("visibilitychange", aoVoltar);
+  limite = setTimeout(parar, 30 * 60 * 1000);   // desiste após 30 min
+  return parar;
+}
+
+// CLIENTE (Pix Mercado Pago): ao confirmar, mostra a tela verde "PAGAMENTO CONFIRMADO" de sempre (ccFecharContaCliente).
+// Guarda o pedido em andamento: se a página recarregar com o Pix na tela, a escuta é retomada.
+const CC_PGTO_PENDENTE = "cc_cliente_pgto_pendente";
+function ccEscutarPagamentoCliente(orderId, empresaId, mesa, valorPago) {
+  try { localStorage.setItem(CC_PGTO_PENDENTE, JSON.stringify({ orderId, empresaId, mesa, valorPago, t: Date.now() })); } catch (e) {}
+  return ccAguardarCobranca(orderId, () => {
+    try { localStorage.removeItem(CC_PGTO_PENDENTE); } catch (e) {}
+    ccFecharContaCliente(mesa, valorPago);
+  });
+}
+function ccRetomarPagamentoCliente() {
+  let p; try { p = JSON.parse(localStorage.getItem(CC_PGTO_PENDENTE) || "null"); } catch (e) {}
+  if (!p || !p.orderId || Date.now() - p.t > 30 * 60 * 1000) { try { localStorage.removeItem(CC_PGTO_PENDENTE); } catch (e) {} return; }
+  ccEscutarPagamentoCliente(p.orderId, p.empresaId, p.mesa, p.valorPago);
+}
+
+// GARÇOM (Pix/Cartão API do Mercado Pago): só baixa a mesa depois que o backend confirma de verdade.
+function ccEscutarConfirmacaoPagamento(orderId, empresaId, ped, opcoes) {
+  opcoes = opcoes || {};
+  return ccAguardarCobranca(orderId, async (linha) => {
+    const metodo = linha.tipo_pagamento === "pix" ? "pix" : "credito";
+    if (opcoes.parcial) {
+      // Divisão parcial: só reduz o saldo da mesa depois que o backend confirmou de verdade.
+      const restante = Math.max(0, Number(opcoes.valorTotalAtual) - Number(opcoes.valorParaCobrar));
+      await ccAtualizarMesaSupabase(empresaId, ped.mesa, (mesaStatus[ped.mesa] && mesaStatus[ped.mesa] !== "livre") ? mesaStatus[ped.mesa] : "ocupada", restante); // abate saldo; status mantido
+      toast(`✅ Pago R$ ${Number(opcoes.valorParaCobrar).toFixed(2)} da Mesa ${ped.mesa} — restam R$ ${restante.toFixed(2)}`);
+    } else {
+      _pedidoMaquininha = ped;   // garante que a baixa vai para ESTE pedido, mesmo que o garçom tenha aberto outro no meio tempo
+      confirmarPgto(metodo);     // reaproveita a função já existente — libera mesa, baixa estoque, registra caixa
+      toast(`✅ Mesa ${ped.mesa} confirmada via ${metodo === "pix" ? "Pix" : "cartão"} — API`);
+    }
+  });
+}
+
+// Equipe vê em tempo real quando OUTRO atendente registra um Tap (InfinitePay) — a baixa da mesa em si já chega pelo quadro de mesas.
+function ccIniciarEscutaTapRealtime() {
+  try {
+    const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+    const equipe = (typeof window.ccDispositivoEquipe === "function" && window.ccDispositivoEquipe())
+      || carregar("perfilAtendenteAtivo", false) === true || !!carregar("turnoAtivo", null);
+    if (!emp || !equipe) return;
+    ccGetSupabaseClient().channel(`tap-equipe-${emp}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "cobrancas_mesa", filter: `empresa_id=eq.${emp}` }, (p) => {
+        const r = p.new || {};
+        if (r.tipo_pagamento !== "cartao_tap") return;
+        if (r.numero_mesa) { ccMarcarMesaPagaTap(r.numero_mesa, { em: r.created_at || new Date().toISOString(), valor: Number(r.valor) || 0, bandeira: r.bandeira || "", atendente: r.atendente || "" }); try { if (typeof S !== "undefined" && S.viewAtual === "atendente") renderAtendente(); } catch (e) {} }
+        if (r.order_id === localStorage.getItem("cc_tap_ultimo_order")) return;   // este aparelho já avisou
+        toast(`💳 Tap registrado — ${r.numero_mesa ? "Mesa " + r.numero_mesa : "Entrega"} · ${fmtBRL(Number(r.valor) || 0)}${r.atendente ? " · " + r.atendente : ""}`);
+      })
+      .subscribe();
+    // ao abrir o app: recupera os Taps das últimas 12 h (aparelho que ficou fechado também mostra "paga")
+    (async () => {
+      try {
+        const desde = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+        const { data } = await ccGetSupabaseClient().from("cobrancas_mesa").select("numero_mesa,valor,bandeira,atendente,created_at")
+          .eq("empresa_id", emp).eq("tipo_pagamento", "cartao_tap").gte("created_at", desde);
+        (data || []).forEach(r => { if (r.numero_mesa && !window.ccMesasPagasTap[Number(r.numero_mesa)]) ccMarcarMesaPagaTap(r.numero_mesa, { em: r.created_at, valor: Number(r.valor) || 0, bandeira: r.bandeira || "", atendente: r.atendente || "" }); });
+        if (typeof S !== "undefined" && S.viewAtual === "atendente" && typeof renderAtendente === "function") renderAtendente();
+      } catch (e) {}
+    })();
+  } catch (e) { console.warn("[Tap realtime]", e && e.message); }
+}
+
+
+// CLIENTE na mesa: quando o garçom cobra no Tap, o celular do cliente sai do "aguardando pagamento" e ele segue pedindo normalmente.
+// (Escuta só a PRÓPRIA mesa do cliente — ele não recebe dados de outras mesas.)
+function ccIniciarEscutaPagoClienteMesa() {
+  try {
+    const emp = window.COOKCONTROL_EMPRESA_ID_ATIVA;
+    const mesa = Number((typeof S !== "undefined" && S.mesa) || localStorage.getItem(CC_MESA_CLIENTE_KEY));
+    const equipe = (typeof window.ccDispositivoEquipe === "function" && window.ccDispositivoEquipe())
+      || carregar("perfilAtendenteAtivo", false) === true || !!carregar("turnoAtivo", null);
+    if (!emp || !mesa || !isFinite(mesa) || equipe) return;
+    ccGetSupabaseClient().channel(`cliente-mesa-${emp}-${mesa}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "cobrancas_mesa", filter: `numero_mesa=eq.${mesa}` }, (p) => {
+        const r = p.new || {};
+        if (r.empresa_id !== emp || r.tipo_pagamento !== "cartao_tap") return;
+        const btn = document.getElementById("cc-fechamento-pagar-btn");
+        if (btn) { btn.disabled = false; btn.style.opacity = ""; }
+        const ag = document.getElementById("cc-fechamento-aguardando"); if (ag) ag.classList.add("hidden");
+        toast("✅ Pagamento recebido! Pode continuar na mesa e pedir mais, se quiser.");
+      })
+      .subscribe();
+  } catch (e) { console.warn("[Cliente Tap]", e && e.message); }
+}
+
+window.addEventListener("load", () => setTimeout(() => { ccRetomarPagamentoCliente(); ccIniciarEscutaTapRealtime(); ccIniciarEscutaPagoClienteMesa(); }, 800));
+
+/* ═══════════════════════════════════════════════════════════════
+   GARÇOM: Tap to Pay da InfinitePay (cartão por aproximação no PRÓPRIO celular)
+   Requisitos: app InfinitePay instalado e logado no celular do garçom (Android 11+ com NFC, ou iPhone com Tap to Pay habilitado).
+   ═══════════════════════════════════════════════════════════════ */
+const CC_TAP_PENDENTE = "cc_tap_pendente";          // cobrança em andamento
+const CC_TAP_SESSAO = "cc_tap_sessao_backup";       // cópia de segurança da sessão do atendente
+const CC_TAP_QS = location.search;                  // guarda a URL de retorno antes de qualquer outro script mexer nela
+
+// Antes de abrir o app da InfinitePay: salva a sessão (nome, turno, ativação do aparelho).
+// (A restauração roda no começo do <head>, no bloco "cc-restaurar-sessao-tap".)
+function ccSalvarSessaoTap() {
+  const snap = { t: Date.now(), local: {}, aba: {} };
+  (window.CC_SESSAO_LOCAL || []).forEach(k => { const v = localStorage.getItem(k); if (v !== null) snap.local[k] = v; });
+  (window.CC_SESSAO_ABA || []).forEach(k => { const v = sessionStorage.getItem(k); if (v !== null) snap.aba[k] = v; });
+  try { localStorage.setItem(CC_TAP_SESSAO, JSON.stringify(snap)); } catch (e) { console.warn("sessão não salva", e); }
+}
+
+function ccAtendenteAtual() {
+  try {
+    const t = JSON.parse(localStorage.getItem("solbahia_turnoAtivo") || "null") || {};
+    return { nome: t.nome || null, turno: t.turno || t.periodo || null };
+  } catch (e) { return { nome: null, turno: null }; }
+}
+
+
+// Botões "Crédito (Tap)" / "Débito (Tap)": monta o deep link e abre o app da InfinitePay
+// Núcleo do Tap: guarda a cobrança em andamento + sessão e abre o app da InfinitePay (usado pela mesa e pela entrega).
+function ccAbrirTapInfinitePay(o /* { orderId, centavos, metodo, parcelas, pend } */) {
+  ccSalvarSessaoTap();                                            // protege nome/turno (ou cadastro do motoboy) do recarregamento
+  localStorage.setItem(CC_TAP_PENDENTE, JSON.stringify(Object.assign({
+    orderId: o.orderId, centavos: o.centavos, metodo: o.metodo, t: Date.now(),
+    atendente: ccAtendenteAtual(),                                // quem iniciou a cobrança
+  }, o.pend || {})));
+
+  const params = {
+    amount: String(o.centavos),
+    payment_method: o.metodo,
+    installments: String(o.parcelas || 1),
+    order_id: o.orderId,
+    result_url: `${location.origin}${location.pathname}?tap_result=1`,  // para onde o app volta (TESTAR no celular)
+    app_client_referrer: "BeachFarolPDV",                         // sempre a mesma string
+    af_force_deeplink: "true",                                    // necessário no iOS
+  };
+  const handle = String((window.COOKCONTROL_CONFIG || {}).infinitepayHandle || "").replace(/^\$/, "").trim();
+  if (handle && !/^SUA_/i.test(handle)) params.handle = handle;  // só envia se já foi preenchida
+
+  // Se o app da InfinitePay abrir, esta página vai para o segundo plano. Se continuar na tela, o app provavelmente não está instalado.
+  let saiu = false;
+  const marca = () => { saiu = true; };
+  window.addEventListener("pagehide", marca, { once: true });
+  window.addEventListener("blur", marca, { once: true });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) saiu = true; }, { once: true });
+  setTimeout(() => {
+    if (!saiu && !document.hidden) {
+      try { localStorage.removeItem(CC_TAP_PENDENTE); localStorage.removeItem(CC_TAP_SESSAO); } catch (e) {}
+      toast("⚠️ O app da InfinitePay não abriu. Instale o app, entre com a conta da loja e tente de novo.");
+    }
+  }, 3000);
+  window.location.href = "infinitepaydash://infinitetap-app?" + new URLSearchParams(params).toString();
+}
+
+// Botões "Crédito (Tap)" / "Débito (Tap)" do garçom (mesa)
+function ccCobrarTapInfinitePay(metodo /* 'credit' | 'debit' */, parcelas) {
+  const ped = _pedidoMaquininha;                                  // pedido/mesa aberto no modal de cobrança
+  if (!ped) { toast("Nenhum pedido selecionado."); return; }
+  const centavos = Math.round(Number(ped.total) * 100);           // 100 = R$ 1,00
+  if (!Number.isFinite(centavos) || centavos < 100) { toast("Mínimo R$ 1,00 no Tap to Pay."); return; }
+  parcelas = metodo === "credit" ? Math.max(1, Math.min(12, parcelas || 1)) : 1;
+  if (centavos / parcelas < 100) { toast("Cada parcela precisa ser de no mínimo R$ 1,00."); return; }
+  ccAbrirTapInfinitePay({ orderId: `tap-mesa${ped.mesa}-${Date.now()}`, centavos, metodo, parcelas, pend: { mesa: ped.mesa, pedidoId: ped.id } });
+}
+
+// Retorno do Tap: valida, registra o comprovante e baixa a mesa
+async function ccTratarRetornoTap() {
+  const p = new URLSearchParams(CC_TAP_QS);
+  if (!p.get("tap_result")) return;
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}   // limpa a URL (evita reprocessar ao atualizar)
+
+  let pend; try { pend = JSON.parse(localStorage.getItem(CC_TAP_PENDENTE) || "null"); } catch (e) {}
+  const nsu = p.get("nsu"), orderId = p.get("order_id");
+  const ok = pend && orderId === pend.orderId                      // é a cobrança que EU iniciei
+          && Date.now() - pend.t < 10 * 60 * 1000                  // recente
+          && /^[0-9a-f-]{36}$/i.test(nsu || "")                    // NSU em formato UUID
+          && !p.get("warning");                                    // sem aviso de erro
+  localStorage.removeItem(CC_TAP_SESSAO);                          // sessão já voltou (ou não é mais necessária)
+  if (!ok) { toast("⚠️ Pagamento por aproximação NÃO confirmado. Confira no app da InfinitePay."); return; }
+  localStorage.removeItem(CC_TAP_PENDENTE);
+
+  const atend = pend.atendente || ccAtendenteAtual();              // atendente de QUANDO a cobrança começou
+  try { localStorage.setItem("cc_tap_ultimo_order", orderId); } catch (e) {}
+  try {
+    await ccGetSupabaseClient().from("cobrancas_mesa").insert({
+      empresa_id: window.COOKCONTROL_EMPRESA_ID_ATIVA || localStorage.getItem("solbahia_empresa_id"),
+      order_id: orderId, numero_mesa: pend.mesa, valor: pend.centavos / 100,
+      valor_pago_centavos: pend.centavos, status: "tap_a_conferir", tipo_pagamento: "cartao_tap",
+      transaction_nsu: nsu, autorizacao: p.get("aut"), bandeira: p.get("card_brand"),
+      atendente: atend.nome, turno: atend.turno,
+    });
+  } catch (e) { console.warn("não gravou o comprovante do tap", e); }
+
+  if (pend.tipo === "delivery") {   // cobrança feita pelo motoboy na rua
+    try { window.ccMotoboyTapRetorno(pend, p); } catch (e) { console.warn(e); toast("⚠️ Tap aprovado, mas a entrega não foi baixada. Avise o Caixa."); }
+    return;
+  }
+  // acha o pedido de novo (a página pode ter recarregado) — no app, a fila de pedidos chama-se pedidosCozinha
+  const achado = (typeof pedidosCozinha !== "undefined" ? pedidosCozinha : []).find(x => x.id === pend.pedidoId);
+  if (achado) _pedidoMaquininha = achado;
+  if (!_pedidoMaquininha) { toast(`⚠️ Tap da Mesa ${pend.mesa} aprovado, mas o pedido não foi encontrado. Dê baixa manual no Caixa.`); return; }
+  const mesaN = Number(_pedidoMaquininha.mesa);
+  ccTapAntesDaBaixa(mesaN);                                         // garante status Ocupada ANTES de abater o saldo (a mesa nunca vira Livre aqui)
+  confirmarPgto(pend.metodo === "debit" ? "debito" : "credito");   // pedido PAGO, saldo abatido, estoque baixado, caixa lançado
+  ccTapFimAtendimento(mesaN, pend.centavos, p, atend);              // fim do atendimento + selo "paga"
+  toast(`💳 Mesa ${pend.mesa} PAGA no Tap (${p.get("card_brand") || "cartão"}) — libere a mesa quando o cliente sair`);
+}
+
+// Mesa paga no Tap: o saldo a pagar fica 0 (ou o que restar de pedidos ainda não pagos) e o status fica OCUPADA.
+// Só o atendente/caixa, tocando em "Liberar Mesa", devolve a mesa para Livre (depois que o cliente saiu e a mesa foi arrumada).
+function ccTapAntesDaBaixa(n) {
+  try {
+    const g = (typeof _ccGrupoMesa === "function") ? _ccGrupoMesa(n) : [n];
+    g.forEach(m => { mesaStatus[m] = "ocupada"; });
+    salvar("mesaStatus", mesaStatus);
+  } catch (e) { console.warn("[Tap] status", e && e.message); }
+}
+function ccTapFimAtendimento(n, centavos, params, atend) {
+  try {
+    const g = (typeof _ccGrupoMesa === "function") ? _ccGrupoMesa(n) : [n];
+    const iso = new Date().toISOString();
+    pedidosCozinha.forEach(x => { if (g.includes(Number(x.mesa)) && x.pago && !x.fimAtendimentoEm) x.fimAtendimentoEm = iso; });
+    salvar("pedidosCozinha_v1", pedidosCozinha);
+    ccMarcarMesaPagaTap(n, { em: iso, valor: centavos / 100, bandeira: params.get("card_brand") || "", atendente: (atend && atend.nome) || "" });
+    g.forEach(m => ccSetMesaStatus(m, "ocupada", (typeof _ccEstadoGrupo === "function" ? _ccEstadoGrupo(m).total : 0) || 0));   // Ocupada + saldo restante (0 se tudo pago)
+    if (typeof S !== "undefined" && S.viewAtual === "atendente" && typeof renderAtendente === "function") renderAtendente();
+  } catch (e) { console.warn("[Tap] fim do atendimento", e && e.message); }
+}
+// espera o app terminar de iniciar (pedidos, turno, Supabase) antes de processar o retorno
+window.addEventListener("load", () => setTimeout(ccTratarRetornoTap, 800));
+
 // ─── MODO A: Cobrar no celular (Pix ou cartão, via payments-router.js) ──
 async function ccCobrarNoCelular(tipoPagamento) {
   const ped = _pedidoMaquininha;
@@ -14314,33 +14620,6 @@ async function ccCobrarNoCelular(tipoPagamento) {
 // Escuta a confirmação REAL vinda do backend (via webhook do adquirente),
 // nunca de um parâmetro de URL — só chama confirmarPgto/atualiza o saldo
 // quando o Supabase realmente marcar 'pago_confirmado' em cobrancas_mesa.
-function ccEscutarConfirmacaoPagamento(orderId, empresaId, ped, opcoes) {
-  opcoes = opcoes || {};
-  const sb = ccGetSupabaseClient();
-  const canal = sb
-    .channel(`cobranca-${orderId}`)
-    .on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "cobrancas_mesa", filter: `order_id=eq.${orderId}` },
-      async (payload) => {
-        if (payload.new.status !== "pago_confirmado") return;
-        const metodo = payload.new.tipo_pagamento === "pix" ? "pix" : "credito";
-
-        if (opcoes.parcial) {
-          // DIFERENCIAL 1 — divisão parcial: só reduz o saldo da mesa
-          // depois que o backend confirmou de verdade, nunca por URL.
-          const restante = Math.max(0, Number(opcoes.valorTotalAtual) - Number(opcoes.valorParaCobrar));
-          await ccAtualizarMesaSupabase(empresaId, ped.mesa, (mesaStatus[ped.mesa] && mesaStatus[ped.mesa] !== "livre") ? mesaStatus[ped.mesa] : "ocupada", restante); // abate saldo; status mantido
-          toast(`✅ Pago R$ ${Number(opcoes.valorParaCobrar).toFixed(2)} da Mesa ${ped.mesa} — restam R$ ${restante.toFixed(2)}`);
-        } else {
-          confirmarPgto(metodo); // reaproveita a função já existente — libera mesa, baixa estoque, registra caixa
-          toast(`✅ Mesa ${ped.mesa} confirmada via ${metodo === "pix" ? "Pix" : "cartão"} — API`);
-        }
-        sb.removeChannel(canal);
-      }
-    )
-    .subscribe();
-}
 
 // ─── DIFERENCIAL 1: Cobrança parcial na mesa (divisão de conta) ────────
 async function cobrarValorParcialMesa(numeroMesa, valorTotalAtual, valorParaCobrar) {
@@ -22923,6 +23202,7 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
       else if (act === 'cobrar') cobrar(p);
       else if (act === 'tap') { S.tap = S.tap || {}; S.tap[p.id] = !S.tap[p.id]; render(); }
       else if (act === 'foto') tirarFoto(p);
+      else if (act === 'tapcred' || act === 'tapdeb') tapInfinite(p, act === 'tapcred' ? 'credit' : 'debit');
       else if (act === 'ok' || act === 'tapok') {
         if (b.__armado) { confirmarEntrega(p.id, true); return; }   /* 2º toque confirma */
         b.__armado = true; var txt = b.textContent, cor = b.style.background;
@@ -23095,6 +23375,9 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     if (p.sem_contato) return h + '<button type="button" data-act="foto" style="' + big + 'background:#7c3aed">📸 TIRAR FOTO DA ENTREGA</button>';
     if (p.pag === 'credito_especial' || p.pagamento_confirmado_em) return h + '<button type="button" data-act="ok" style="' + big + 'background:#16a34a">✅ ENTREGUE</button>';
     h += '<button type="button" data-act="tap" style="' + big + 'background:#2563eb">💳 PAGAMENTO NO TAP / DINHEIRO</button>';
+    if (p.pag === 'cartao_maq')
+      h += '<div style="display:flex;gap:8px"><button type="button" data-act="tapcred" style="' + big + 'background:#7c3aed">📲 CRÉDITO (Tap)</button>' +
+           '<button type="button" data-act="tapdeb" style="' + big + 'background:#0891b2">📲 DÉBITO (Tap)</button></div>';
     if (S.tap[p.id])
       h += '<div style="margin-top:8px;padding:12px;border:2px solid #2563eb;border-radius:12px;background:#eff6ff;font-size:.85rem;color:#1e3a8a;font-weight:700;line-height:1.5">' +
         '💳 <b>Tap:</b> Abra o app do Mercado Pago, selecione cobrar via Tap e aproxime o cartão. Valor: <b>' + brl(total) + '</b>.<br>' +
@@ -23207,6 +23490,30 @@ body.cc-modo-cliente:not(.cc-cardapio-full) #conteudo-secao-mesa #cat-nav .cat-p
     document.body.appendChild(o); $('mb-foto-x').onclick = function () { o.remove(); };
   }
   window.ccMotoboyEnviarFoto = enviarFoto;
+
+  /* ── Tap to Pay da InfinitePay no celular do motoboy ──
+     O valor vem do pedido (itens + taxa de entrega). Na volta do app, o pagamento do pedido fica PAGO (cartão) e o NSU
+     fica gravado em cobrancas_mesa (status tap_a_conferir) para o Caixa conciliar com o extrato da InfinitePay. */
+  function tapInfinite(p, metodo) {
+    var total = Math.round(((Number(p.total) || 0) + (Number(p.taxa_entrega) || 0)) * 100) / 100, centavos = Math.round(total * 100);
+    if (typeof window.ccAbrirTapInfinitePay !== 'function') { toastz('Tap indisponível neste aparelho.'); return; }
+    if (!(centavos >= 100)) { toastz('Mínimo R$ 1,00 no Tap to Pay.'); return; }
+    window.ccAbrirTapInfinitePay({
+      orderId: 'tap-delivery-' + p.id + '-' + Date.now(), centavos: centavos, metodo: metodo, parcelas: 1,
+      pend: { tipo: 'delivery', pedidoId: p.id, atendente: { nome: S.nome || localStorage.getItem(LS_NOME) || null, turno: 'delivery' } }
+    });
+  }
+  window.ccMotoboyTapRetorno = function (pend, params) {
+    var p = ped().filter(function (x) { return x.id === pend.pedidoId; })[0];
+    if (!p) { toastz('⚠️ Tap aprovado, mas o pedido não foi encontrado. Avise o Caixa.'); return; }
+    p.pagamento_confirmado_em = new Date().toISOString(); p.pagamento_confirmado_via = 'cartao';
+    p.pagamento_tap_nsu = params.get('nsu'); p.pagamento_tap_bandeira = params.get('card_brand') || '';
+    if (typeof salvarDelivery === 'function') salvarDelivery();
+    try { if ($('cc-motoboy-root')) render(); } catch (e) {}
+    try { if (typeof renderDelivery === 'function' && document.getElementById('dl-lista')) renderDelivery(); } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) {}
+    toastz('✅ Cartão aprovado no Tap — ' + brl(pend.centavos / 100) + '. Toque em ENTREGUE.');
+  };
 
   /* ── Confirmar entrega ───────────────────────────────────────────── */
   function confirmarEntrega(id, pular) {
