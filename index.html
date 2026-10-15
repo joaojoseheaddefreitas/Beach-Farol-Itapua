@@ -7969,66 +7969,79 @@ function ccQrPrintAbrir(mesas, links) {
     const idx = lista.map(n => mesas.indexOf(n));
     const col = cfg.cor === "cor";
     const v = col ? {tit: cfg.c1, num: cfg.c2, cab: cfg.c1, mold: cfg.c2, ac: "#FFB703"} : {tit: "#000", num: "#000", cab: "#000", mold: "#000", ac: "#000"};
-    const logoTop = cfg.logoTopo ? (cfg.logoSrc || logoData) : "";
-    const N = /^[1-6]$/.test(String(cfg.org)) ? Number(cfg.org) : 0;   // 0 = Automático (tamanho do QR decide); 1..6 = cartões por folha (escala automática)
-    const cardW = Math.max(9.0, Number(cfg.qrCm) + 2.2);   // cm — o cartão CRESCE junto com o QR (QR grande = 1 por folha; menor = o navegador encaixa mais)
+    const bannerSrc = cfg.logoTopo ? (cfg.logoSrc || logoData) : "";   // BANNER do topo (largura total do cartão)
+    const logoSrc = cfg.imgSrc || "";                                  // LOGO (base do cartão, ao lado do COMO PEDIR)
+    const N = /^[1-6]$/.test(String(cfg.org)) ? Number(cfg.org) : 0;   // 0 = Automático; 1..6 = cartões por folha (escala automática)
+    const cardW = Math.max(9.0, Number(cfg.qrCm) + 2.2);               // cm — largura mínima; o cartão cresce com o QR e segue a proporção da folha A4
+    // Espaço que o banner e/ou o logo ocupariam e NÃO estão sendo usados: vai inteiro para o número da mesa.
+    const livre = (bannerSrc ? 0 : Number(cfg.logoMm) + 2.2) + (logoSrc ? 0 : Number(cfg.imgMm));
     const css =
-      // Sem @page{margin:0}: o navegador/impressora usam as margens normais do papel, então nada é cortado nas bordas.
       "@page{size:auto}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}"
     + "body{font-family:Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}"
-    + // cartões são blocos "inline" centralizados: o navegador nunca parte um cartão entre duas folhas e encaixa quantos couberem por linha
-    ".grade{text-align:center;width:100%;font-size:0}"
-    + ".cartao{display:inline-flex;vertical-align:top;margin:0 1mm 3mm;text-align:left;font-size:12pt;width:" + cardW + "cm;max-width:100%;border:0.5pt solid #CCC;padding:2mm;background:#fff;break-inside:avoid;page-break-inside:avoid}"
+    + ".grade{text-align:center;width:100%;font-size:0}"
+    + ".cartao{display:inline-flex;vertical-align:top;margin:0 1mm 3mm;text-align:left;font-size:12pt;width:" + cardW + "cm;border:0.5pt solid #CCC;padding:2mm;background:#fff;break-inside:avoid;page-break-inside:avoid}"
     + ".moldura{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2.2mm;border:1.4pt solid " + v.mold + ";border-radius:3mm;padding:3mm 4mm}"
     + ".topo{flex:none;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5mm}"
-    // banner/logo do topo: ocupa a largura do cartão, mantém a proporção e NUNCA é cortado (contain)
-    + ".logo{flex:none;display:block;width:100%;height:auto;max-height:" + cfg.logoMm + "mm;object-fit:contain}"
+    + ".banner{flex:none;display:block;width:100%;height:auto;max-height:" + cfg.logoMm + "mm;object-fit:contain}"
     + ".titulo{width:100%;text-align:center;font-weight:700;font-size:" + cfg.tituloPt + "pt;line-height:1.1;color:" + v.tit + ";text-transform:uppercase;overflow-wrap:anywhere}"
     + ".sub{width:100%;text-align:center;font-size:9.5pt;line-height:1.15;color:#000}"
-    + ".mesa{flex:none;width:92%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:" + v.num + ";color:#fff;border-radius:3mm;padding:2mm 0 1mm}"
+    // bloco MESA: cresce para ocupar todo o vão livre; o tamanho do número é calculado para preencher esse bloco
+    + ".mesa{flex:1 1 auto;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:" + v.num + ";color:#fff;border-radius:3mm;padding:2mm 0 1mm}"
     + ".mesa .rot{font-size:20pt;font-weight:700;letter-spacing:6pt;line-height:1}"
-    + ".mesa .num{font-size:" + cfg.numPt + "pt;font-weight:900;line-height:1;letter-spacing:-2pt}"
+    + ".mesa .num{font-size:" + cfg.numPt + "pt;font-weight:900;line-height:.9;letter-spacing:-2pt;white-space:nowrap}"
     + ".qr{flex:none;position:relative;background:#fff;padding:4mm;line-height:0}"
     + ".qr .cantos{position:absolute;top:0;left:0;width:100%;height:100%;color:" + v.mold + "}"
     + ".qr img{position:relative;display:block;width:" + cfg.qrCm + "cm;height:" + cfg.qrCm + "cm;max-width:100%;image-rendering:pixelated}"
-    + ".passos{flex:none;font-size:10.5pt;line-height:1.25;color:#000;text-align:left}"
-    + ".passos .tit{font-size:12pt;font-weight:700;letter-spacing:.3pt;color:" + v.cab + ";margin-bottom:1mm}"
+    // base: COMO PEDIR (letra grande e nítida) + logo ao lado
+    + ".base{flex:none;width:100%;display:flex;align-items:center;justify-content:space-between;gap:3mm}.base.sem{justify-content:center}"
+    + ".passos{flex:1 1 auto;min-width:0;font-size:11.5pt;line-height:1.25;color:#000;text-align:left}"
+    + ".passos .tit{font-size:13pt;font-weight:700;letter-spacing:.3pt;color:" + v.cab + ";margin-bottom:1mm}"
     + ".passos b{font-weight:700}.passos .p{display:flex;align-items:center;margin-top:1mm}"
-    + ".passos .n{flex:none;width:5.8mm;height:5.8mm;border-radius:50%;background:" + v.cab + ";color:#fff;font-weight:700;font-size:10.5pt;line-height:5.8mm;text-align:center;margin-right:2.2mm}"
+    + ".passos .n{flex:none;width:6.4mm;height:6.4mm;border-radius:50%;background:" + v.cab + ";color:#fff;font-weight:700;font-size:11.5pt;line-height:6.4mm;text-align:center;margin-right:2.4mm}"
+    + ".logo-rod{flex:none;display:block;max-width:36%;width:auto;height:auto;max-height:" + cfg.imgMm + "mm;object-fit:contain}"
     + ".rod{flex:none;width:100%;text-align:center;font-size:9pt;line-height:1.2;color:#000;white-space:pre-line}"
-    // imagem do rodapé: mesma regra — largura do cartão, proporção preservada, nunca cortada
-    + ".extra{flex:none;display:block;width:100%;height:auto;max-height:" + cfg.imgMm + "mm;object-fit:contain}"
     + (N
         ? ".pag{display:grid;grid-template-columns:repeat(var(--c,1),max-content);justify-content:center;justify-items:center;align-content:start;gap:3mm;width:100%;break-after:page;page-break-after:always}.pag:last-child{break-after:auto;page-break-after:auto}.pag .cartao{margin:0;display:flex}"
         : "")
-    // Tela (prévia): simula uma folha A4 com margem de 10 mm. Impressão: sem largura/margem fixas — vale o que o papel e a impressora definem.
     + "@media screen{html{background:#e5e7eb}body{width:210mm;min-height:297mm;margin:0 auto;padding:10mm;background:#fff}.cartao{margin-bottom:" + (N ? "0" : "3mm") + "}.pag{padding-bottom:6mm;margin-bottom:6mm;border-bottom:1px dashed #bbb}}"
     + "@media print{body{width:auto;margin:0;padding:0}}";
     const cartoes = lista.map((n, i) =>
         '<div class="cartao"><div class="moldura">'
-      + '<div class="topo">' + (logoTop ? '<img class="logo" src="' + logoTop + '" alt="">' : '') + '<div class="titulo">' + esc(cfg.titulo) + '</div>' + (cfg.subtitulo ? '<div class="sub">' + esc(cfg.subtitulo) + '</div>' : '') + '</div>'
+      + '<div class="topo">' + (bannerSrc ? '<img class="banner" src="' + bannerSrc + '" alt="">' : '') + '<div class="titulo">' + esc(cfg.titulo) + '</div>' + (cfg.subtitulo ? '<div class="sub">' + esc(cfg.subtitulo) + '</div>' : '') + '</div>'
       + '<div class="mesa"><span class="rot">MESA</span><span class="num">' + String(n).padStart(2, "0") + '</span></div>'
       + '<div class="qr"><svg class="cantos" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M2 16V2H16M84 2H98V16M98 84V98H84M16 98H2V84" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>'
       + '<img src="' + qrSrc(idx[i]) + '" alt="QR Mesa ' + n + '"></div>'
-      + '<div class="passos"><div class="tit">COMO PEDIR:</div>'
+      + '<div class="base' + (logoSrc ? '' : ' sem') + '"><div class="passos"><div class="tit">COMO PEDIR:</div>'
       + '<div class="p"><span class="n">1</span><span>Abra a <b>Câmera</b> do seu celular</span></div>'
       + '<div class="p"><span class="n">2</span><span>Aponte para o <b>quadrado acima</b></span></div>'
       + '<div class="p"><span class="n">3</span><span>Toque no <b>link</b> que aparecer na tela</span></div></div>'
+      + (logoSrc ? '<img class="logo-rod" src="' + logoSrc + '" alt="">' : '') + '</div>'
       + (cfg.rodape ? '<div class="rod">' + esc(cfg.rodape) + '</div>' : '')
-      + (cfg.imgSrc ? '<img class="extra" src="' + cfg.imgSrc + '" alt="">' : '')
       + '</div></div>');
     let corpo;
     if(N) { corpo = ""; for(let i = 0; i < cartoes.length; i += N) corpo += '<section class="pag">' + cartoes.slice(i, i + N).join("") + '</section>'; }
     else corpo = '<main class="grade">' + cartoes.join("") + '</main>';
-    // Escala automática: mede o cartão em tamanho natural e acha a grade (colunas × linhas) que dá o MAIOR cartão cabendo N por folha A4 útil (margem 10 mm).
-    const escalar = !N ? "" : '<scr' + 'ipt>(function(){var N=' + N + ';function go(){var cs=[].slice.call(document.querySelectorAll(".cartao"));if(!cs.length)return;'
-      + 'var w=0,h=0;cs.forEach(function(c){w=Math.max(w,c.offsetWidth);h=Math.max(h,c.offsetHeight)});if(!w||!h)return;'
-      + 'var W=716,H=1040,g=11,best=null;[[1,1],[2,1],[1,2],[2,2],[3,1],[1,3],[3,2],[2,3],[4,2],[2,4],[3,3]].forEach(function(o){if(o[0]*o[1]<N)return;'
-      + 'var z=Math.min((W-(o[0]-1)*g)/o[0]/w,(H-(o[1]-1)*g)/o[1]/h);if(!best||z>best.z+1e-9)best={c:o[0],r:o[1],z:z}});'
-      + 'if(!best)return;var z=Math.min(3,best.z*0.97);window.__ccZoom=z;'
-      + 'cs.forEach(function(c){c.style.zoom=z});[].forEach.call(document.querySelectorAll(".pag"),function(p){p.style.setProperty("--c",best.c)})}'
-      + 'if(document.readyState==="complete")go();else window.addEventListener("load",go)})()</scr' + 'ipt>';
-    return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Cartões de mesa</title><style>' + css + '</style></head><body>' + corpo + escalar
+    // Ajuste automático (tela e impressão): (1) cartão segue a proporção da folha — A4 no modo Automático, ou a proporção da célula no modo "N por folha",
+    // (2) o vão livre (banner/logo ausentes + sobra da proporção) é entregue ao bloco MESA, (3) o número cresce até preencher o bloco, sem distorcer.
+    const grades = "[[1,1],[2,1],[1,2],[2,2],[3,1],[1,3],[3,2],[2,3],[4,2],[2,4],[3,3]]";
+    const ajuste = '<scr' + 'ipt>(function(){var N=' + N + ',LIV=' + livre + ',NUM=' + Number(cfg.numPt) + ',TIT=' + Number(cfg.tituloPt) + ',MM=96/25.4,R=297/210;'
+      + 'function go(){var cs=[].slice.call(document.querySelectorAll(".cartao"));if(!cs.length)return;'
+      + 'function tit(){cs.forEach(function(c){var e=c.querySelector(".titulo");if(!e)return;var t=TIT;e.style.fontSize=t+"pt";while(e.scrollHeight>t*96/72*1.1+2&&t>12){t-=.5;e.style.fontSize=t+"pt"}})}'
+      + 'function nat(){cs.forEach(function(c){c.style.width="";c.style.height="";c.style.zoom="";var n=c.querySelector(".num"),r=c.querySelector(".rot");if(n)n.style.fontSize=NUM+"pt";if(r)r.style.fontSize="20pt"});tit();'
+      +   'var w=0,h=0;cs.forEach(function(c){w=Math.max(w,c.offsetWidth);h=Math.max(h,c.offsetHeight)});return{w:w,h:h+LIV*MM}}'
+      + 'function sz(rho,n){var W=Math.max(n.w,n.h/rho);return{w:W,h:W*rho}}'
+      + 'function fit(c){var m=c.querySelector(".moldura"),bx=c.querySelector(".mesa"),n=c.querySelector(".num"),r=c.querySelector(".rot");if(!m||!bx||!n||!r)return;'
+      +   'function ok(s){n.style.fontSize=s+"pt";r.style.fontSize=Math.max(20,Math.min(60,s*.22))+"pt";return m.scrollHeight<=m.clientHeight+1&&n.offsetWidth<=bx.clientWidth-14}'
+      +   'var lo=NUM,hi=700;if(!ok(lo)){n.style.fontSize=NUM+"pt";r.style.fontSize="20pt";return}for(var i=0;i<16;i++){var md=(lo+hi)/2;if(ok(md))lo=md;else hi=md}ok(lo)}'
+      + 'function apply(s){cs.forEach(function(c){c.style.width=s.w+"px";c.style.height=s.h+"px"});tit();cs.forEach(fit)}'
+      + 'var n0=nat();'
+      + (N
+          ? 'var best=null,W=716,H=1040,g=11;' + grades + '.forEach(function(o){if(o[0]*o[1]<N)return;var cw=(W-(o[0]-1)*g)/o[0],ch=(H-(o[1]-1)*g)/o[1],s=sz(ch/cw,n0),z=cw/s.w;if(!best||z>best.z+1e-9)best={c:o[0],s:s,z:z}});'
+            + 'if(!best)return;apply(best.s);var z=Math.min(3,best.z*.97);window.__ccZoom=z;cs.forEach(function(c){c.style.zoom=z});'
+            + '[].forEach.call(document.querySelectorAll(".pag"),function(p){p.style.setProperty("--c",best.c)})'
+          : 'apply(sz(R,n0))')
+      + '}if(document.readyState==="complete")go();else window.addEventListener("load",go)})()</scr' + 'ipt>';
+    return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Cartões de mesa</title><style>' + css + '</style></head><body>' + corpo + ajuste
       + (autoPrint ? '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print()},400)}</scr' + 'ipt>' : '') + '</body></html>';
   };
 
@@ -8068,13 +8081,13 @@ function ccQrPrintAbrir(mesas, links) {
   +   '<label>Subtítulo (opcional)<input type="text" id="qp-sub" maxlength="80"></label>'
   +   '<label>Texto no rodapé (opcional)<input type="text" id="qp-rod" maxlength="120" placeholder="Ex.: Instagram @barraca · Wi-Fi: senha"></label>'
   + '</div><div class="qp-lin">'
-  +   '<label>Logo do topo<input type="file" id="qp-logof" accept="image/*"></label>'
-  +   '<button type="button" id="qp-logo-rm">Usar logo padrão</button>'
-  +   '<label class="qp-ck"><input type="checkbox" id="qp-logot"> Mostrar logo no topo</label>'
-  +   '<label>Altura logo (mm)<input type="number" id="qp-logomm" min="4" max="60" step="1"></label>'
-  +   '<label>Imagem extra (rodapé)<input type="file" id="qp-imgf" accept="image/*"></label>'
-  +   '<button type="button" id="qp-img-rm">Remover imagem</button>'
-  +   '<label>Altura imagem (mm)<input type="number" id="qp-imgmm" min="4" max="80" step="1"></label>'
+  +   '<label>Banner do topo<input type="file" id="qp-logof" accept="image/*"></label>'
+  +   '<button type="button" id="qp-logo-rm">Usar banner padrão</button>'
+  +   '<label class="qp-ck"><input type="checkbox" id="qp-logot"> Mostrar banner no topo</label>'
+  +   '<label>Altura do banner (mm)<input type="number" id="qp-logomm" min="4" max="60" step="1"></label>'
+  +   '<label>Logo (base, ao lado do COMO PEDIR)<input type="file" id="qp-imgf" accept="image/*"></label>'
+  +   '<button type="button" id="qp-img-rm">Remover logo</button>'
+  +   '<label>Altura do logo (mm)<input type="number" id="qp-imgmm" min="4" max="80" step="1"></label>'
   + '</div><div class="qp-lin">'
   +   '<label class="qp-ck"><input type="checkbox" id="qp-logoq"> Logo no centro do QR</label>'
   +   '<label>Tamanho do QR: <span id="qp-qrv"></span> cm<input type="range" id="qp-qrcm" min="3.2" max="12" step="0.1"></label>'
