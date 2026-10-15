@@ -2160,7 +2160,7 @@ body.cc-modo-cliente #conteudo-secao-mesa{padding-bottom:110px!important}
 <div style="flex-basis:100%;height:0"></div>
 <button class="btn-primary px-4 py-2.5 text-xs whitespace-nowrap" onclick="imprimirQRMesa('lista')">🖨️ Imprimir Lista</button>
 <button class="btn-primary px-4 py-2.5 text-xs" onclick="imprimirQRMesa()">🖨️ Imprimir QR</button>
-<button class="btn-primary px-4 py-2.5 text-xs" onclick="imprimirQRMesa('todas')">🖨️ Imprimir Todas (4 por folha)</button>
+<button class="btn-primary px-4 py-2.5 text-xs" onclick="imprimirQRMesa('todas')">🖨️ Imprimir Todas</button>
 </div>
 <!-- QR exibido -->
 <div class="hidden mt-5" id="cli-qr-area">
@@ -7934,7 +7934,7 @@ function imprimirQRMesa(alvo) {
   ccQrPrintAbrir(mesas, links);
 }
 
-// ─── PRÉVIA + IMPRESSÃO DOS CARTÕES DE MESA (A4, 4 por folha) ───────────────────────────
+// ─── PRÉVIA + IMPRESSÃO DOS CARTÕES DE MESA (grade fluida: quantos couberem por folha) ───────────────────────────
 // A folha é um documento HTML isolado (iframe): a prévia é EXATAMENTE o que vai para a impressora,
 // sem sofrer interferência de nenhum @media print do restante do sistema.
 // Antes de liberar o botão Imprimir, TODOS os QR são decodificados (300 e 150 dpi) e comparados com o link esperado.
@@ -7943,17 +7943,16 @@ function ccQrPrintAbrir(mesas, links) {
   const cfgApp = (typeof config !== "undefined" && config) || {};
   const esc = t => String(t == null ? "" : t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const cfg = { titulo: cfgApp.qrTituloEtiqueta || "CARDÁPIO BEACH FAROL", subtitulo: "", rodape: "", cor: "pb", c1: "#D9480F", c2: "#0B6FB8",
-                logoTopo: true, logoQR: true, qrCm: 4.1, numPt: 80, tituloPt: 20, logoMm: 8, imgMm: 12, logoSrc: "", imgSrc: "" };
+                logoTopo: true, logoQR: true, qrCm: 4.1, numPt: 80, tituloPt: 20, logoMm: 8, imgMm: 12, logoSrc: "", imgSrc: "", org: "auto", copias: 1 };
   try { Object.assign(cfg, JSON.parse(localStorage.getItem(KEY) || "{}")); } catch(e) {}
-  cfg.encher = false;
+  cfg.copias = 1;   // cópias do cartão (só quando é 1 mesa); não é gravado
   let logoPadrao = null, logoData = "", seq = 0, testeOk = false, camStream = null, timer = null;
   const qrCache = {};
   const total = mesas.length;
-  const nCart = () => (cfg.encher && total === 1) ? 4 : total;
-  const nFolhas = () => Math.ceil(nCart() / 4);
+  const nCart = () => total === 1 ? Math.max(1, Math.min(12, Number(cfg.copias) || 1)) : total;
 
   const salvar = () => {
-    const c = Object.assign({}, cfg); delete c.encher;
+    const c = Object.assign({}, cfg); delete c.copias;
     try { localStorage.setItem(KEY, JSON.stringify(c)); }
     catch(e) { try { c.logoSrc = ""; c.imgSrc = ""; localStorage.setItem(KEY, JSON.stringify(c)); } catch(e2) {} }
   };
@@ -7966,53 +7965,70 @@ function ccQrPrintAbrir(mesas, links) {
   };
 
   const docHTML = (autoPrint) => {
-    const lista = (cfg.encher && total === 1) ? [mesas[0], mesas[0], mesas[0], mesas[0]] : mesas;
+    const lista = total === 1 ? Array.from({ length: nCart() }, () => mesas[0]) : mesas;
     const idx = lista.map(n => mesas.indexOf(n));
     const col = cfg.cor === "cor";
     const v = col ? {tit: cfg.c1, num: cfg.c2, cab: cfg.c1, mold: cfg.c2, ac: "#FFB703"} : {tit: "#000", num: "#000", cab: "#000", mold: "#000", ac: "#000"};
     const logoTop = cfg.logoTopo ? (cfg.logoSrc || logoData) : "";
+    const N = /^[1-6]$/.test(String(cfg.org)) ? Number(cfg.org) : 0;   // 0 = Automático (tamanho do QR decide); 1..6 = cartões por folha (escala automática)
+    const cardW = Math.max(9.0, Number(cfg.qrCm) + 2.2);   // cm — o cartão CRESCE junto com o QR (QR grande = 1 por folha; menor = o navegador encaixa mais)
     const css =
-      "@page{size:A4;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}"
+      // Sem @page{margin:0}: o navegador/impressora usam as margens normais do papel, então nada é cortado nas bordas.
+      "@page{size:auto}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}"
     + "body{font-family:Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}"
-    + ".folha{width:210mm;height:296mm;padding:5mm;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;page-break-after:always;break-after:page;overflow:hidden;background:#fff}"
-    + ".folha:last-child{page-break-after:auto;break-after:auto}"
-    + ".cartao{border:0.5pt solid #CCC;display:flex;padding:2mm;background:#fff;overflow:hidden;min-height:0}"
-    + ".moldura{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;border:1.4pt solid " + v.mold + ";border-radius:3mm;padding:2mm 3mm;overflow:hidden}"
-    + ".topo{width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1mm}"
-    + ".logo{height:" + cfg.logoMm + "mm;max-width:60mm;object-fit:contain;display:block}"
-    + ".titulo{width:100%;text-align:center;font-weight:700;font-size:" + cfg.tituloPt + "pt;line-height:1.1;color:" + v.tit + ";text-transform:uppercase}"
+    + // cartões são blocos "inline" centralizados: o navegador nunca parte um cartão entre duas folhas e encaixa quantos couberem por linha
+    ".grade{text-align:center;width:100%;font-size:0}"
+    + ".cartao{display:inline-flex;vertical-align:top;margin:0 1mm 3mm;text-align:left;font-size:12pt;width:" + cardW + "cm;max-width:100%;border:0.5pt solid #CCC;padding:2mm;background:#fff;break-inside:avoid;page-break-inside:avoid}"
+    + ".moldura{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2.2mm;border:1.4pt solid " + v.mold + ";border-radius:3mm;padding:3mm 4mm}"
+    + ".topo{flex:none;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5mm}"
+    // banner/logo do topo: ocupa a largura do cartão, mantém a proporção e NUNCA é cortado (contain)
+    + ".logo{flex:none;display:block;width:100%;height:auto;max-height:" + cfg.logoMm + "mm;object-fit:contain}"
+    + ".titulo{width:100%;text-align:center;font-weight:700;font-size:" + cfg.tituloPt + "pt;line-height:1.1;color:" + v.tit + ";text-transform:uppercase;overflow-wrap:anywhere}"
     + ".sub{width:100%;text-align:center;font-size:9.5pt;line-height:1.15;color:#000}"
-    + ".mesa{width:92%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:" + v.num + ";color:#fff;border-radius:3mm;padding:2mm 0 1mm}"
+    + ".mesa{flex:none;width:92%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:" + v.num + ";color:#fff;border-radius:3mm;padding:2mm 0 1mm}"
     + ".mesa .rot{font-size:20pt;font-weight:700;letter-spacing:6pt;line-height:1}"
     + ".mesa .num{font-size:" + cfg.numPt + "pt;font-weight:900;line-height:1;letter-spacing:-2pt}"
-    + ".qr{position:relative;background:#fff;padding:4mm;line-height:0}"
+    + ".qr{flex:none;position:relative;background:#fff;padding:4mm;line-height:0}"
     + ".qr .cantos{position:absolute;top:0;left:0;width:100%;height:100%;color:" + v.mold + "}"
-    + ".qr img{position:relative;display:block;width:" + cfg.qrCm + "cm;height:" + cfg.qrCm + "cm;image-rendering:pixelated}"
-    + ".passos{font-size:10.5pt;line-height:1.25;color:#000;text-align:left}"
+    + ".qr img{position:relative;display:block;width:" + cfg.qrCm + "cm;height:" + cfg.qrCm + "cm;max-width:100%;image-rendering:pixelated}"
+    + ".passos{flex:none;font-size:10.5pt;line-height:1.25;color:#000;text-align:left}"
     + ".passos .tit{font-size:12pt;font-weight:700;letter-spacing:.3pt;color:" + v.cab + ";margin-bottom:1mm}"
     + ".passos b{font-weight:700}.passos .p{display:flex;align-items:center;margin-top:1mm}"
     + ".passos .n{flex:none;width:5.8mm;height:5.8mm;border-radius:50%;background:" + v.cab + ";color:#fff;font-weight:700;font-size:10.5pt;line-height:5.8mm;text-align:center;margin-right:2.2mm}"
-    + ".rod{width:100%;text-align:center;font-size:9pt;line-height:1.2;color:#000;white-space:pre-line}"
-    + ".extra{height:" + cfg.imgMm + "mm;max-width:80mm;object-fit:contain;display:block}"
-    + "@media screen{html,body{background:#e5e7eb}.folha{margin:0 0 10px 0}}"
-    + "@media print{.folha{margin:0!important}}";
-    let folhas = "";
-    for(let i = 0; i < lista.length; i += 4) {
-      folhas += '<section class="folha">' + lista.slice(i, i + 4).map((n, j) =>
+    + ".rod{flex:none;width:100%;text-align:center;font-size:9pt;line-height:1.2;color:#000;white-space:pre-line}"
+    // imagem do rodapé: mesma regra — largura do cartão, proporção preservada, nunca cortada
+    + ".extra{flex:none;display:block;width:100%;height:auto;max-height:" + cfg.imgMm + "mm;object-fit:contain}"
+    + (N
+        ? ".pag{display:grid;grid-template-columns:repeat(var(--c,1),max-content);justify-content:center;justify-items:center;align-content:start;gap:3mm;width:100%;break-after:page;page-break-after:always}.pag:last-child{break-after:auto;page-break-after:auto}.pag .cartao{margin:0;display:flex}"
+        : "")
+    // Tela (prévia): simula uma folha A4 com margem de 10 mm. Impressão: sem largura/margem fixas — vale o que o papel e a impressora definem.
+    + "@media screen{html{background:#e5e7eb}body{width:210mm;min-height:297mm;margin:0 auto;padding:10mm;background:#fff}.cartao{margin-bottom:" + (N ? "0" : "3mm") + "}.pag{padding-bottom:6mm;margin-bottom:6mm;border-bottom:1px dashed #bbb}}"
+    + "@media print{body{width:auto;margin:0;padding:0}}";
+    const cartoes = lista.map((n, i) =>
         '<div class="cartao"><div class="moldura">'
-        + '<div class="topo">' + (logoTop ? '<img class="logo" src="' + logoTop + '" alt="">' : '') + '<div class="titulo">' + esc(cfg.titulo) + '</div>' + (cfg.subtitulo ? '<div class="sub">' + esc(cfg.subtitulo) + '</div>' : '') + '</div>'
-        + '<div class="mesa"><span class="rot">MESA</span><span class="num">' + String(n).padStart(2, "0") + '</span></div>'
-        + '<div class="qr"><svg class="cantos" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M2 16V2H16M84 2H98V16M98 84V98H84M16 98H2V84" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>'
-        + '<img src="' + qrSrc(idx[i + j]) + '" alt="QR Mesa ' + n + '"></div>'
-        + '<div class="passos"><div class="tit">COMO PEDIR:</div>'
-        + '<div class="p"><span class="n">1</span><span>Abra a <b>Câmera</b> do seu celular</span></div>'
-        + '<div class="p"><span class="n">2</span><span>Aponte para o <b>quadrado acima</b></span></div>'
-        + '<div class="p"><span class="n">3</span><span>Toque no <b>link</b> que aparecer na tela</span></div></div>'
-        + (cfg.rodape ? '<div class="rod">' + esc(cfg.rodape) + '</div>' : '')
-        + (cfg.imgSrc ? '<img class="extra" src="' + cfg.imgSrc + '" alt="">' : '')
-        + '</div></div>').join("") + '</section>';
-    }
-    return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Cartões de mesa</title><style>' + css + '</style></head><body>' + folhas
+      + '<div class="topo">' + (logoTop ? '<img class="logo" src="' + logoTop + '" alt="">' : '') + '<div class="titulo">' + esc(cfg.titulo) + '</div>' + (cfg.subtitulo ? '<div class="sub">' + esc(cfg.subtitulo) + '</div>' : '') + '</div>'
+      + '<div class="mesa"><span class="rot">MESA</span><span class="num">' + String(n).padStart(2, "0") + '</span></div>'
+      + '<div class="qr"><svg class="cantos" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M2 16V2H16M84 2H98V16M98 84V98H84M16 98H2V84" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>'
+      + '<img src="' + qrSrc(idx[i]) + '" alt="QR Mesa ' + n + '"></div>'
+      + '<div class="passos"><div class="tit">COMO PEDIR:</div>'
+      + '<div class="p"><span class="n">1</span><span>Abra a <b>Câmera</b> do seu celular</span></div>'
+      + '<div class="p"><span class="n">2</span><span>Aponte para o <b>quadrado acima</b></span></div>'
+      + '<div class="p"><span class="n">3</span><span>Toque no <b>link</b> que aparecer na tela</span></div></div>'
+      + (cfg.rodape ? '<div class="rod">' + esc(cfg.rodape) + '</div>' : '')
+      + (cfg.imgSrc ? '<img class="extra" src="' + cfg.imgSrc + '" alt="">' : '')
+      + '</div></div>');
+    let corpo;
+    if(N) { corpo = ""; for(let i = 0; i < cartoes.length; i += N) corpo += '<section class="pag">' + cartoes.slice(i, i + N).join("") + '</section>'; }
+    else corpo = '<main class="grade">' + cartoes.join("") + '</main>';
+    // Escala automática: mede o cartão em tamanho natural e acha a grade (colunas × linhas) que dá o MAIOR cartão cabendo N por folha A4 útil (margem 10 mm).
+    const escalar = !N ? "" : '<scr' + 'ipt>(function(){var N=' + N + ';function go(){var cs=[].slice.call(document.querySelectorAll(".cartao"));if(!cs.length)return;'
+      + 'var w=0,h=0;cs.forEach(function(c){w=Math.max(w,c.offsetWidth);h=Math.max(h,c.offsetHeight)});if(!w||!h)return;'
+      + 'var W=716,H=1040,g=11,best=null;[[1,1],[2,1],[1,2],[2,2],[3,1],[1,3],[3,2],[2,3],[4,2],[2,4],[3,3]].forEach(function(o){if(o[0]*o[1]<N)return;'
+      + 'var z=Math.min((W-(o[0]-1)*g)/o[0]/w,(H-(o[1]-1)*g)/o[1]/h);if(!best||z>best.z+1e-9)best={c:o[0],r:o[1],z:z}});'
+      + 'if(!best)return;var z=Math.min(3,best.z*0.97);window.__ccZoom=z;'
+      + 'cs.forEach(function(c){c.style.zoom=z});[].forEach.call(document.querySelectorAll(".pag"),function(p){p.style.setProperty("--c",best.c)})}'
+      + 'if(document.readyState==="complete")go();else window.addEventListener("load",go)})()</scr' + 'ipt>';
+    return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Cartões de mesa</title><style>' + css + '</style></head><body>' + corpo + escalar
       + (autoPrint ? '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print()},400)}</scr' + 'ipt>' : '') + '</body></html>';
   };
 
@@ -8055,16 +8071,17 @@ function ccQrPrintAbrir(mesas, links) {
   +   '<label>Logo do topo<input type="file" id="qp-logof" accept="image/*"></label>'
   +   '<button type="button" id="qp-logo-rm">Usar logo padrão</button>'
   +   '<label class="qp-ck"><input type="checkbox" id="qp-logot"> Mostrar logo no topo</label>'
-  +   '<label>Altura logo (mm)<input type="number" id="qp-logomm" min="4" max="25" step="1"></label>'
+  +   '<label>Altura logo (mm)<input type="number" id="qp-logomm" min="4" max="60" step="1"></label>'
   +   '<label>Imagem extra (rodapé)<input type="file" id="qp-imgf" accept="image/*"></label>'
   +   '<button type="button" id="qp-img-rm">Remover imagem</button>'
-  +   '<label>Altura imagem (mm)<input type="number" id="qp-imgmm" min="4" max="30" step="1"></label>'
+  +   '<label>Altura imagem (mm)<input type="number" id="qp-imgmm" min="4" max="80" step="1"></label>'
   + '</div><div class="qp-lin">'
   +   '<label class="qp-ck"><input type="checkbox" id="qp-logoq"> Logo no centro do QR</label>'
-  +   '<label>Tamanho do QR: <span id="qp-qrv"></span> cm<input type="range" id="qp-qrcm" min="3.2" max="5.2" step="0.1"></label>'
-  +   '<label>Nº da mesa: <span id="qp-numv"></span> pt<input type="range" id="qp-num" min="40" max="100" step="2"></label>'
-  +   '<label>Título: <span id="qp-tptv"></span> pt<input type="range" id="qp-tpt" min="12" max="28" step="1"></label>'
-  +   (total === 1 ? '<label class="qp-ck"><input type="checkbox" id="qp-encher"> Repetir 4× na folha</label>' : '')
+  +   '<label>Tamanho do QR: <span id="qp-qrv"></span> cm<input type="range" id="qp-qrcm" min="3.2" max="12" step="0.1"></label>'
+  +   '<label>Nº da mesa: <span id="qp-numv"></span> pt<input type="range" id="qp-num" min="40" max="140" step="2"></label>'
+  +   '<label>Título: <span id="qp-tptv"></span> pt<input type="range" id="qp-tpt" min="12" max="36" step="1"></label>'
+  +   '<label>Cartões por folha<select id="qp-org"><option value="auto">Automático (pelo tamanho do QR)</option><option value="1">1 por folha</option><option value="2">2 por folha</option><option value="3">3 por folha</option><option value="4">4 por folha</option><option value="6">6 por folha</option></select></label>'
+  +   (total === 1 ? '<label>Cópias do cartão<select id="qp-copias"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="6">6</option></select></label>' : '')
   + '</div><div class="qp-lin">'
   +   '<button type="button" id="qp-teste">🔍 Testar QR</button>'
   +   '<button type="button" id="qp-cam">📷 Testar com a câmera</button>'
@@ -8102,7 +8119,8 @@ function ccQrPrintAbrir(mesas, links) {
   lig("qp-cor", "cor"); lig("qp-c1", "c1"); lig("qp-c2", "c2"); lig("qp-tit", "titulo"); lig("qp-sub", "subtitulo"); lig("qp-rod", "rodape");
   lig("qp-logot", "logoTopo", "ck"); lig("qp-logomm", "logoMm", "num"); lig("qp-imgmm", "imgMm", "num");
   lig("qp-logoq", "logoQR", "ck"); lig("qp-qrcm", "qrCm", "num"); lig("qp-num", "numPt", "num"); lig("qp-tpt", "tituloPt", "num");
-  if($("qp-encher")) lig("qp-encher", "encher", "ck");
+  $("qp-org").value = cfg.org || "auto"; lig("qp-org", "org");
+  if($("qp-copias")) { $("qp-copias").value = String(cfg.copias); lig("qp-copias", "copias", "num"); }
 
   const lerImagem = (file, cb) => {
     if(!file) return;
@@ -8156,9 +8174,12 @@ function ccQrPrintAbrir(mesas, links) {
     const falhas = [];
     // 1) Layout: nada pode estourar o cartão
     const d = ifr.contentDocument, estouro = [];
-    d.querySelectorAll(".moldura").forEach((m, i) => { if(m.scrollHeight > m.clientHeight + 1) estouro.push(i + 1); });
+    d.querySelectorAll(".moldura").forEach((m, i) => { if(m.scrollHeight > m.clientHeight + 1 || m.scrollWidth > m.clientWidth + 1) estouro.push(i + 1); });
+    const fz = (ifr.contentWindow && ifr.contentWindow.__ccZoom) || 1;                    // escala aplicada no modo "N por folha"
+    const qrReal = cfg.qrCm * fz;                                                         // tamanho físico do QR impresso, em cm
+    const gigante = !/^[1-6]$/.test(String(cfg.org)) && [].some.call(d.querySelectorAll(".cartao"), c => c.offsetHeight > 1040 || c.offsetWidth > 718);   // maior que uma folha A4 com margem
     // 2) Leitura de cada QR no tamanho real impresso (300 dpi e 150 dpi)
-    const px300 = Math.round(cfg.qrCm / 2.54 * 300), px150 = Math.round(cfg.qrCm / 2.54 * 150);
+    const px300 = Math.round(qrReal / 2.54 * 300), px150 = Math.round(qrReal / 2.54 * 150);
     for(let i = 0; i < total; i++) {
       if(my !== seq) return;
       const img = await carrega(qrSrc(i));
@@ -8171,9 +8192,11 @@ function ccQrPrintAbrir(mesas, links) {
       if(i % 6 === 5) await new Promise(r => setTimeout(r, 0));
     }
     if(my !== seq) return;
-    if(estouro.length) { setSt("⚠️ O conteúdo não cabe em " + estouro.length + " cartão(ões). Reduza o QR, o nº da mesa, a imagem ou o texto.", "er"); testeOk = false; }
+    if(qrReal < 2.5) { setSt("⛔ Com " + cfg.org + " por folha o QR sairia com só " + qrReal.toFixed(1) + " cm — pequeno demais para ler. Use menos cartões por folha.", "er"); testeOk = false; }
+    else if(gigante) { setSt("⚠️ O cartão ficou maior que uma folha A4. Reduza o QR, o nº da mesa ou a altura das imagens.", "er"); testeOk = false; }
+    else if(estouro.length) { setSt("⚠️ O conteúdo não cabe em " + estouro.length + " cartão(ões). Reduza o QR, o nº da mesa, a imagem ou o texto.", "er"); testeOk = false; }
     else if(falhas.length) { setSt("⛔ QR com falha na leitura (mesa " + falhas.slice(0, 12).join(", ") + (falhas.length > 12 ? "…" : "") + "). Impressão bloqueada — aumente o QR ou desligue o logo no centro.", "er"); testeOk = false; }
-    else { setSt("✔ " + total + " QR lidos e conferidos com o link de cada mesa · " + nCart() + " cartão(ões) · " + nFolhas() + " folha(s) A4 · 4 por folha. Liberado para imprimir.", "ok"); testeOk = true; }
+    else { setSt("✔ " + total + " QR lidos e conferidos com o link de cada mesa · " + nCart() + " cartão(ões) · " + (/^[1-6]$/.test(String(cfg.org)) ? cfg.org + " por folha · QR impresso com " + qrReal.toFixed(1) + " cm" : "o navegador encaixa quantos couberem por folha") + ". Liberado para imprimir.", "ok"); testeOk = true; }
     btnImp.disabled = !testeOk;
   };
 
